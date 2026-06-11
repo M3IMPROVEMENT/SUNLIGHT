@@ -1,13 +1,10 @@
-unique_candidates = (
-    final_df["TVA_CANDIDATES"]
-    .dropna()
-    .astype(str)
-    .str.split(", ")
-    .explode()
-    .dropna()
-    .drop_duplicates()
-)
+good_tva = final_df[
+    final_df["TVA"].astype(str).str.match(r"^[A-Z]{2}", na=False)
+]
 
-unique_candidates = unique_candidates[unique_candidates != ""]
+bad_tva = final_df[
+    ~final_df["TVA"].astype(str).str.match(r"^[A-Z]{2}", na=False)
+]
 
-print("Unique TVA candidates:", len(unique_candidates))
+print("Good TVA:", len(good_tva))
+print("Bad TVA:", len(bad_tva))
