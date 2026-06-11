@@ -1,11 +1,16 @@
+def find_candidates_safe(row):
+    candidates = []
 
-suspicious_mask = final_df["TVA_BE_CLEAN"].isna()
+    # Search only places where TVA is more likely
+    for col in ["TVA", "OTHER_INFO"]:
+        value = row.get(col)
 
-final_df.loc[suspicious_mask, "TVA_CANDIDATES"] = final_df.loc[suspicious_mask].apply(
-    lambda row: ", ".join(find_candidates_whole_row(row)),
-    axis=1
-)
+        if pd.isna(value):
+            continue
 
-final_df.loc[~suspicious_mask, "TVA_CANDIDATES"] = ""
+        numbers = re.findall(r"\d{9,10}", str(value))
 
-print("Rows with candidates:", (final_df["TVA_CANDIDATES"] != "").sum())
+        for num in numbers:
+            candidates.append("BE" + num.zfill(10))
+
+    return list(dict.fromkeys(candidates))
