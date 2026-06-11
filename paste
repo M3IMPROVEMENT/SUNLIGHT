@@ -1,26 +1,31 @@
+# valid KBO TVA list
 valid_tvas = set(
     checked_df.loc[checked_df["IS_VALID_KBO"], "TVA_CANDIDATE"]
 )
 
-# Start with already clean BE TVA
+# create mapping from candidate -> candidate only if valid
+valid_map = {tva: tva for tva in valid_tvas}
+
+# start with already clean BE TVA
 final_df["TVA_FINAL"] = final_df["TVA_BE_CLEAN"]
 
-# Only process rows where TVA_BE_CLEAN is missing
-mask = final_df["TVA_FINAL"].isna()
+# split candidates into first valid TVA
+candidate_lists = (
+    final_df["TVA_CANDIDATES"]
+    .fillna("")
+    .astype(str)
+    .str.split(", ")
+)
 
-def choose_from_candidates(candidates):
-    if pd.isna(candidates) or candidates == "":
-        return None
-
-    for candidate in str(candidates).split(", "):
-        if candidate in valid_tvas:
-            return candidate
-
+def fast_choose(candidates):
+    for c in candidates:
+        if c in valid_map:
+            return c
     return None
 
-final_df.loc[mask, "TVA_FINAL"] = final_df.loc[mask, "TVA_CANDIDATES"].apply(
-    choose_from_candidates
-)
+mask = final_df["TVA_FINAL"].isna()
+
+final_df.loc[mask, "TVA_FINAL"] = candidate_lists[mask].map(fast_choose)
 
 final_df["TVA"] = final_df["TVA_FINAL"]
 
