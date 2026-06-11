@@ -14,3 +14,55 @@ def find_candidates_safe(row):
             candidates.append("BE" + num.zfill(10))
 
     return list(dict.fromkeys(candidates))
+
+
+
+
+
+
+
+suspicious_mask = final_df["TVA_BE_CLEAN"].isna()
+
+final_df.loc[suspicious_mask, "TVA_CANDIDATES"] = final_df.loc[suspicious_mask].apply(
+    lambda row: ", ".join(find_candidates_safe(row)),
+    axis=1
+)
+
+final_df.loc[~suspicious_mask, "TVA_CANDIDATES"] = ""
+
+print("Rows with candidates:", (final_df["TVA_CANDIDATES"] != "").sum())
+
+
+
+
+
+
+def find_candidates_whole_row(row):
+    candidates = []
+
+    for col in row.index:
+        value = row.get(col)
+
+        if pd.isna(value):
+            continue
+
+        numbers = re.findall(r"\d{9,10}", str(value))
+
+        for num in numbers:
+            candidates.append("BE" + num.zfill(10))
+
+    return list(dict.fromkeys(candidates))
+
+
+
+
+
+
+
+
+
+
+
+lambda row: ", ".join(find_candidates_whole_row(row))
+
+
