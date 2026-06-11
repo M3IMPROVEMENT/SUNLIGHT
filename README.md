@@ -1,49 +1,40 @@
-def check_tva_kbo(tva):
+def find_tva_candidates_in_row(row):
+    candidates = []
+
+    for value in row.values:
+        candidate = normalize_tva_candidate(value)
+        if candidate:
+            candidates.append(candidate)
+
+    return list(dict.fromkeys(candidates))
+
+
+def choose_best_tva(row):
     """
-    Checks a Belgian company number on KBO Public Search.
-    Returns True if the number appears valid/found, False otherwise.
-
-    Important: use this only for suspicious candidates, not millions of rows.
+    Priority:
+    1. TVA column if valid and KBO confirms
+    2. Any candidate in the row if KBO confirms
+    3. Return None if no confirmed TVA
     """
-    if not tva:
-        return False
 
-    number = str(tva).upper().replace("BE", "")
-    number = re.sub(r"\D", "", number)
+    candidates = []
 
-    if len(number) not in [9, 10]:
-        return False
+    # Priority: current TVA column first
+    if "TVA" in row.index:
+        first = normalize_tva_candidate(row["TVA"])
+        if first:
+            candidates.append(first)
 
-    url = "https://kbopub.economie.fgov.be/kbopub/zoeknummerform.html"
+    # Then scan whole row
+    for candidate in find_tva_candidates_in_row(row):
+        if candidate not in candidates:
+            candidates.append(candidate)
 
-    try:
-        response = requests.get(
-            url,
-            params={"nummer": number},
-            timeout=15,
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            }
-        )
+    for candidate in candidates:
+        if check_tva_kbo(candidate):
+            time.sleep(0.4)
+            return candidate
 
-        text = response.text.lower()
+        time.sleep(0.4)
 
-        # If the number appears in returned page, likely found
-        if number in re.sub(r"\D", "", text):
-            return True
-
-        invalid_words = [
-            "geen resultaat",
-            "aucun résultat",
-            "no result",
-            "niet gevonden",
-            "introuvable"
-        ]
-
-        if any(word in text for word in invalid_words):
-            return False
-
-        return False
-
-    except Exception:
-        return False
+    return None
