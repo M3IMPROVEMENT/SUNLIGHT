@@ -1,1 +1,11 @@
 
+suspicious_mask = final_df["TVA_BE_CLEAN"].isna()
+
+final_df.loc[suspicious_mask, "TVA_CANDIDATES"] = final_df.loc[suspicious_mask].apply(
+    lambda row: ", ".join(find_candidates_whole_row(row)),
+    axis=1
+)
+
+final_df.loc[~suspicious_mask, "TVA_CANDIDATES"] = ""
+
+print("Rows with candidates:", (final_df["TVA_CANDIDATES"] != "").sum())
