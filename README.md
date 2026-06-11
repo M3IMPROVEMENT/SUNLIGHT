@@ -1,16 +1,19 @@
-valid_format = unique_tvas[
-    unique_tvas.str.match(r"^[A-Z]{2}[0-9]+$", na=False)
+unique_candidates = (
+    final_df["TVA_CANDIDATES"]
+    .dropna()
+    .astype(str)
+    .str.split(", ")
+    .explode()
+    .str.strip()
+    .drop_duplicates()
+)
+
+unique_candidates = unique_candidates[unique_candidates != ""]
+
+print("Total unique candidates:", len(unique_candidates))
+
+numeric_candidates = unique_candidates[
+    unique_candidates.str.match(r"^BE[0-9]{10}$", na=False)
 ]
 
-numeric_only = unique_tvas[
-    unique_tvas.str.match(r"^[0-9]{9,10}$", na=False)
-]
-
-other = unique_tvas[
-    ~unique_tvas.isin(valid_format) &
-    ~unique_tvas.isin(numeric_only)
-]
-
-print("Already valid format:", len(valid_format))
-print("Numeric only:", len(numeric_only))
-print("Other / suspicious:", len(other))
+print("BE-format candidates:", len(numeric_candidates))
