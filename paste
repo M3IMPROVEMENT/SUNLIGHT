@@ -1,15 +1,7 @@
-final_df["DUP_KEY"] = (
-    final_df["TVA"].fillna("").astype(str) + "|" +
-    final_df["GSM"].fillna("").astype(str) + "|" +
-    final_df["TEL"].fillna("").astype(str)
-)
+from datetime import datetime
 
-before = len(final_df)
+output_file = "master_one_folder_final_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx"
 
-final_df = final_df.drop_duplicates(subset=["DUP_KEY"], keep="first")
+final_df.to_excel(output_file, index=False, engine="openpyxl")
 
-after = len(final_df)
-
-print("Rows before:", before)
-print("Rows after:", after)
-print("Duplicates removed:", before - after)
+print("DONE:", output_file)
