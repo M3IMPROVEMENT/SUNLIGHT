@@ -1,49 +1,60 @@
-final_df = pd.concat(all_data, ignore_index=True)
+test_df = final_df.head(10).copy()
 
-print("Rows before cleaning:", len(final_df))
+test_df["TVA_CHECKED"] = test_df.apply(choose_best_tva, axis=1)
 
-
-for col in ["STE", "NAME", "ADDRESS", "HOUSE_NUM", "CP", "CITY",
-            "FORME_JURIDIQUE", "CODE_LINGUISTIQUE", "CIVILITE",
-            "COMMENTS", "OTHER_INFO"]:
-    final_df[col] = final_df[col].apply(clean_text)
+test_df[["STE", "TVA", "GSM", "TEL", "TVA_CANDIDATES", "TVA_CHECKED"]]
 
 
 
-bad_words = (
-    "numero|numéro|denomination|dénomination|telephone|téléphone|"
-    "adresse|postal|vat|tva|société|societe"
+
+final_df["TVA_CHECKED"] = final_df.apply(choose_best_tva, axis=1)
+
+final_df["TVA"] = final_df["TVA_CHECKED"]
+
+final_df.drop(columns=["TVA_CHECKED"], inplace=True)
+
+print("Valid checked TVA:", final_df["TVA"].notna().sum())
+
+
+final_df["OTHER_INFO"] = final_df["OTHER_INFO"].apply(
+    lambda x: None if is_ean_noise(x) else x
 )
 
 final_df = final_df[
-    ~final_df["STE"].astype(str).str.lower().str.contains(bad_words, na=False)
+    final_df["STE"].notna() |
+    final_df["TVA"].notna() |
+    final_df["GSM"].notna() |
+    final_df["TEL"].notna()
 ]
 
-print("Rows after removing fake headers:", len(final_df))
+print("Rows after EAN/noise cleaning:", len(final_df))
 
 
 
-final_df["GSM"] = final_df["GSM"].apply(clean_phone)
-final_df["TEL"] = final_df["TEL"].apply(clean_phone)
+with_tva = final_df[final_df["TVA"].notna()].copy()
+without_tva = final_df[final_df["TVA"].isna()].copy()
 
+with_tva = with_tva.drop_duplicates(subset=["TVA"], keep="first")
 
-
-
-final_df["TVA_CANDIDATES"] = final_df.apply(
-    lambda row: ", ".join(find_tva_candidates_in_row(row)),
-    axis=1
+without_tva = without_tva.drop_duplicates(
+    subset=["STE", "CP", "CITY"],
+    keep="first"
 )
 
-to_check = final_df[final_df["TVA_CANDIDATES"] != ""].copy()
+final_df = pd.concat([with_tva, without_tva], ignore_index=True)
 
-to_check[["STE", "TVA", "GSM", "TEL", "TVA_CANDIDATES", "SOURCE_FILE"]].to_excel(
-    "tva_candidates_before_kbo_check.xlsx",
+print("Rows after deduplication:", len(final_df))
+
+
+
+output_file = "master_companies_checked_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx"
+
+final_df.to_excel(
+    output_file,
     index=False,
     engine="openpyxl"
 )
 
-print("Candidates exported:", len(to_check))
-
-
+print("DONE:", output_file)
 
 
