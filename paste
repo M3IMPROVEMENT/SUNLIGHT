@@ -1,19 +1,29 @@
-checked_results = []
-
-for i, tva in enumerate(unique_candidates, start=1):
-    valid = check_tva_kbo_strict(tva)
-    checked_results.append((tva, valid))
-
-    if i % 100 == 0:
-        print(i, "/", len(unique_candidates))
-
-    time.sleep(0.3)
-
-checked_df = pd.DataFrame(
-    checked_results,
-    columns=["TVA_CANDIDATE", "IS_VALID_KBO"]
+valid_tvas = set(
+    checked_df.loc[checked_df["IS_VALID_KBO"], "TVA_CANDIDATE"]
 )
 
-checked_df.to_excel("kbo_checked_candidates_one_folder.xlsx", index=False)
+# Start with already clean BE TVA
+final_df["TVA_FINAL"] = final_df["TVA_BE_CLEAN"]
 
-print("KBO checking done")
+# Only process rows where TVA_BE_CLEAN is missing
+mask = final_df["TVA_FINAL"].isna()
+
+def choose_from_candidates(candidates):
+    if pd.isna(candidates) or candidates == "":
+        return None
+
+    for candidate in str(candidates).split(", "):
+        if candidate in valid_tvas:
+            return candidate
+
+    return None
+
+final_df.loc[mask, "TVA_FINAL"] = final_df.loc[mask, "TVA_CANDIDATES"].apply(
+    choose_from_candidates
+)
+
+final_df["TVA"] = final_df["TVA_FINAL"]
+
+final_df.drop(columns=["TVA_FINAL"], inplace=True)
+
+print("Final valid TVA:", final_df["TVA"].notna().sum())
