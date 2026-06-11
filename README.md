@@ -1,18 +1,22 @@
-def process_type_2(file):
-    df = pd.read_excel(file, header=None, engine="openpyxl")
-    df = df.dropna(how="all")
+all_data = []
+errors = []
 
-    df = df.iloc[:, :6]
+for i, file in enumerate(files, start=1):
+    try:
+        file_type = classify_file(file)
 
-    while df.shape[1] < 6:
-        df[df.shape[1]] = None
+        if file_type == "TYPE_1_HEADER":
+            df = process_type_1(file)
+        else:
+            df = process_type_2(file)
 
-    df.columns = ["STE", "ADDRESS", "CP", "CITY", "TEL", "TVA"]
+        all_data.append(df)
 
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = None
+        print(f"{i}/{len(files)} processed - {file_type} - {file.name}")
 
-    df["SOURCE_FILE"] = file.name
+    except Exception as e:
+        errors.append((file.name, str(e)))
+        print("ERROR:", file.name, "->", e)
 
-    return df[COLUMNS]
+print("Processed files:", len(all_data))
+print("Errors:", len(errors))
