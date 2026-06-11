@@ -1,19 +1,18 @@
-# Split all TVA candidates from all rows
-all_candidates = (
-    final_df["TVA_CANDIDATES"]
-    .dropna()
-    .astype(str)
-    .str.split(", ")
-    .explode()
-    .str.strip()
-)
+def validate_tva_with_kbo_or_row(row):
+    # 1) Try TVA column first
+    main_tva = normalize_tva_candidate(row.get("TVA"))
 
-all_candidates = all_candidates[all_candidates != ""]
+    if main_tva and check_tva_kbo(main_tva):
+        return main_tva
 
-print("Total candidates:", len(all_candidates))
+    # 2) If TVA column failed, search all row values
+    candidates = find_tva_candidates_in_row(row)
 
-# Count candidates that start with BE
-starts_be = all_candidates.str.startswith("BE")
+    for candidate in candidates:
+        if check_tva_kbo(candidate):
+            return candidate
 
-print("Start with BE:", starts_be.sum())
-print("Do NOT start with BE:", (~starts_be).sum())
+        time.sleep(0.4)
+
+    # 3) Nothing valid found
+    return None
