@@ -1,8 +1,15 @@
-import pandas as pd
-
-checked_df = pd.read_excel(
-    "kbo_checked_candidates_one_folder.xlsx"
+final_df["DUP_KEY"] = (
+    final_df["TVA"].fillna("").astype(str) + "|" +
+    final_df["GSM"].fillna("").astype(str) + "|" +
+    final_df["TEL"].fillna("").astype(str)
 )
 
-print(checked_df.head())
-print(checked_df.shape)
+before = len(final_df)
+
+final_df = final_df.drop_duplicates(subset=["DUP_KEY"], keep="first")
+
+after = len(final_df)
+
+print("Rows before:", before)
+print("Rows after:", after)
+print("Duplicates removed:", before - after)
