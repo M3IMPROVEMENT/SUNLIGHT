@@ -1,7 +1,5 @@
-from datetime import datetime
-
-output_file = "master_one_folder_final_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx"
-
-final_df.to_excel(output_file, index=False, engine="openpyxl")
-
-print("DONE:", output_file)
+Rows after EAN/noise cleaning: 17605
+Rows before: 17605
+Rows after: 5648
+Duplicates removed: 11957
+DONE: master_one_folder_final_20260611_145917.xlsx
