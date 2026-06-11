@@ -1,24 +1,13 @@
-def process_type_1(file):
-    df = pd.read_excel(file, engine="openpyxl")
+def process_type_2(file):
+    df = pd.read_excel(file, header=None, engine="openpyxl")
+    df = df.dropna(how="all")
 
-    df.columns = [str(c).strip().upper() for c in df.columns]
-    df.rename(columns=rename_map, inplace=True)
+    df = df.iloc[:, :6]
 
-    # Merge duplicated columns after renaming
-    df = df.groupby(level=0, axis=1).first()
+    while df.shape[1] < 6:
+        df[df.shape[1]] = None
 
-    other_cols = [c for c in df.columns if c not in COLUMNS]
-
-    if other_cols:
-        df["OTHER_INFO"] = df[other_cols].apply(
-            lambda row: " | ".join(
-                f"{col}: {val}" for col, val in row.items()
-                if pd.notna(val) and str(val).strip().lower() not in ["nan", ""]
-            ),
-            axis=1
-        )
-    else:
-        df["OTHER_INFO"] = None
+    df.columns = ["STE", "ADDRESS", "CP", "CITY", "TEL", "TVA"]
 
     for col in COLUMNS:
         if col not in df.columns:
