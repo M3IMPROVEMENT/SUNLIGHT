@@ -1,15 +1,5 @@
-unique_candidates = (
-    final_df["TVA_CANDIDATES"]
-    .dropna()
-    .astype(str)
-    .str.split(", ")
-    .explode()
-    .str.strip()
-    .drop_duplicates()
-)
+be_candidates = unique_candidates[
+    unique_candidates.str.match(r"^BE[0-9]{10}$", na=False)
+]
 
-unique_candidates = unique_candidates[unique_candidates != ""]
-
-print("Unique candidates:", len(unique_candidates))
-
-print(unique_candidates.head(30))
+print("BE candidates:", len(be_candidates))
