@@ -1,113 +1,130 @@
-files = (
-    list(Path(r"C:\Users\Sunlight\Desktop\DOSSIE 09-06-2026 - Copie\3-AB-12-08-2024-TR").rglob("*.xlsx"))
-    +
-    list(Path(r"C:\Users\Sunlight\Desktop\DOSSIE 09-06-2026 - Copie\Chaima 10-06-2024--TR").rglob("*.xlsx"))
-    +
-    list(Path(r"C:\Users\Sunlight\Desktop\DOSSIE 09-06-2026 - Copie\Imane 10-06-2024--TR").rglob("*.xlsx"))
-)
-
-print("Total files:", len(files))
+def clean_text(x):
+    if pd.isna(x):
+        return None
+    x = str(x).strip()
+    if x.lower() in ["nan", "none", ""]:
+        return None
+    return x
 
 
+def normalize_tva_candidate(x):
+    """
+    Converts possible TVA:
+    BE0462890433 -> BE0462890433
+    0462890433   -> BE0462890433
+    462890433    -> BE0462890433
+    """
+    if pd.isna(x):
+        return None
 
-COLUMNS = [
-    "STE",
-    "NAME",
-    "TVA",
-    "ADDRESS",
-    "HOUSE_NUM",
-    "CP",
-    "CITY",
-    "GSM",
-    "TEL",
-    "FORME_JURIDIQUE",
-    "CODE_LINGUISTIQUE",
-    "CIVILITE",
-    "COMMENTS",
-    "OTHER_INFO",
-    "SOURCE_FILE"
-]
+    s = str(x).upper().strip()
+    s = re.sub(r"[^A-Z0-9]", "", s)
+
+    if s == "":
+        return None
+
+    if re.match(r"^BE[0-9]{9,10}$", s):
+        return s
+
+    if s.isdigit() and len(s) in [9, 10]:
+        return "BE" + s.zfill(10)
+
+    return None
 
 
+def clean_phone(x):
+    """
+    Cleans GSM/TEL.
+    Keeps Belgian phone-like numbers.
+    Removes long EAN/barcode noise.
+    """
+    if pd.isna(x):
+        return None
+
+    s = str(x).strip()
+    if s.lower() in ["nan", "none", ""]:
+        return None
+
+    digits = re.sub(r"\D", "", s)
+
+    if digits == "":
+        return None
+
+    # Remove EAN/noise
+    if len(digits) > 12:
+        return None
+
+    # 0032xxxx -> 32xxxx
+    if digits.startswith("0032"):
+        digits = "32" + digits[4:]
+
+    # 0xxxx -> 32xxxx
+    elif digits.startswith("0"):
+        digits = "32" + digits[1:]
+
+    # Belgian mobile/fixed after cleaning
+    if digits.startswith("32") and len(digits) in [10, 11]:
+        return digits
+
+    # Local fixed number, like 22191358
+    if len(digits) in [8, 9]:
+        return digits
+
+    return None
 
 
+def is_ean_noise(x):
+    if pd.isna(x):
+        return False
 
-rename_map = {
-    # STE
-    "DENOMINATION SOCIALE": "STE",
-    "DÉNOMINATION SOCIALE": "STE",
-    "NAME_ORG1": "STE",
-    "NAME_ORG2": "STE",
-    "RS": "STE",
-    "ENTITY NAME": "STE",
-    "TITLE": "STE",
+    digits = re.sub(r"\D", "", str(x))
 
-    # NAME
-    "NOM": "NAME",
-    "PRENOM": "NAME",
-    "PRÉNOM": "NAME",
-    "NAME": "NAME",
+    return len(digits) >= 13def check_tva_kbo(tva):
+    """
+    Checks a Belgian company number on KBO Public Search.
+    Returns True if the number appears valid/found, False otherwise.
 
-    # ADDRESS
-    "RUE": "ADDRESS",
-    "ADRESSE": "ADDRESS",
-    "STREET60": "ADDRESS",
-    "ADRESSE COMPLET": "ADDRESS",
-    "ADRES": "ADDRESS",
-    "STRAAT": "ADDRESS",
+    Important: use this only for suspicious candidates, not millions of rows.
+    """
+    if not tva:
+        return False
 
-    # HOUSE NUMBER
-    "NUMERO DE MAISON": "HOUSE_NUM",
-    "NUMÉRO DE MAISON": "HOUSE_NUM",
-    "AJOUT DE NUMERO DE MAISON": "HOUSE_NUM",
-    "AJOUT DE NUMÉRO DE MAISON": "HOUSE_NUM",
-    "NUMERO": "HOUSE_NUM",
-    "NUMÉRO": "HOUSE_NUM",
-    "HOUSE_NUM1": "HOUSE_NUM",
-    "HOUSE_NUM2": "HOUSE_NUM",
-    "NUM": "HOUSE_NUM",
-    "N": "HOUSE_NUM",
+    number = str(tva).upper().replace("BE", "")
+    number = re.sub(r"\D", "", number)
 
-    # CP
-    "CODE POSTAL": "CP",
-    "POSTALCODE": "CP",
-    "ZIPCODE": "CP",
-    "PC": "CP",
-    "POST CODE": "CP",
+    if len(number) not in [9, 10]:
+        return False
 
-    # CITY
-    "LIEU(COMPLET)": "CITY",
-    "PROVINCE": "CITY",
-    "CITY-1": "CITY",
-    "CITY": "CITY",
-    "VILLE": "CITY",
+    url = "https://kbopub.economie.fgov.be/kbopub/zoeknummerform.html"
 
-    # TVA
-    "NUMERO D'ENTREPRISE": "TVA",
-    "NUMÉRO D'ENTREPRISE": "TVA",
-    "VAT_REG_NO": "TVA",
-    "TVA": "TVA",
-    "FINALVAT": "TVA",
-    "COLONNE6": "TVA",
+    try:
+        response = requests.get(
+            url,
+            params={"nummer": number},
+            timeout=15,
+            headers={
+                "User-Agent": "Mozilla/5.0"
+            }
+        )
 
-    # GSM
-    "GSM": "GSM",
-    "PHONE_CLEAN": "GSM",
-    "TEL2": "GSM",
+        text = response.text.lower()
 
-    # TEL
-    "NUMERO DE TELEPHONE": "TEL",
-    "NUMÉRO DE TÉLÉPHONE": "TEL",
-    "TELEPHONE": "TEL",
-    "TÉLÉPHONE": "TEL",
-    "PHONE": "TEL",
-    "FIX": "TEL",
-    "NO DE TELEPHONE": "TEL",
-    "NO DE TÉLÉPHONE": "TEL",
-    "FINAL PHONE": "TEL",
-    "COLONNE5": "TEL",
-    "COLONNE7": "TEL",
+        # If the number appears in returned page, likely found
+        if number in re.sub(r"\D", "", text):
+            return True
 
-    # COMMENTS
-    "DESCRIPTION": "COMMENTS"
-}
+        invalid_words = [
+            "geen resultaat",
+            "aucun résultat",
+            "no result",
+            "niet gevonden",
+            "introuvable"
+        ]
+
+        if any(word in text for word in invalid_words):
+            return False
+
+        return False
+
+    except Exception:
+        return False
