@@ -1,68 +1,19 @@
-def find_candidates_safe(row):
-    candidates = []
+checked_results = []
 
-    # Search only places where TVA is more likely
-    for col in ["TVA", "OTHER_INFO"]:
-        value = row.get(col)
+for i, tva in enumerate(unique_candidates, start=1):
+    valid = check_tva_kbo_strict(tva)
+    checked_results.append((tva, valid))
 
-        if pd.isna(value):
-            continue
+    if i % 100 == 0:
+        print(i, "/", len(unique_candidates))
 
-        numbers = re.findall(r"\d{9,10}", str(value))
+    time.sleep(0.3)
 
-        for num in numbers:
-            candidates.append("BE" + num.zfill(10))
-
-    return list(dict.fromkeys(candidates))
-
-
-
-
-
-
-
-suspicious_mask = final_df["TVA_BE_CLEAN"].isna()
-
-final_df.loc[suspicious_mask, "TVA_CANDIDATES"] = final_df.loc[suspicious_mask].apply(
-    lambda row: ", ".join(find_candidates_safe(row)),
-    axis=1
+checked_df = pd.DataFrame(
+    checked_results,
+    columns=["TVA_CANDIDATE", "IS_VALID_KBO"]
 )
 
-final_df.loc[~suspicious_mask, "TVA_CANDIDATES"] = ""
+checked_df.to_excel("kbo_checked_candidates_one_folder.xlsx", index=False)
 
-print("Rows with candidates:", (final_df["TVA_CANDIDATES"] != "").sum())
-
-
-
-
-
-
-def find_candidates_whole_row(row):
-    candidates = []
-
-    for col in row.index:
-        value = row.get(col)
-
-        if pd.isna(value):
-            continue
-
-        numbers = re.findall(r"\d{9,10}", str(value))
-
-        for num in numbers:
-            candidates.append("BE" + num.zfill(10))
-
-    return list(dict.fromkeys(candidates))
-
-
-
-
-
-
-
-
-
-
-
-lambda row: ", ".join(find_candidates_whole_row(row))
-
-
+print("KBO checking done")
