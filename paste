@@ -1,24 +1,5 @@
-coffe code postal 1000 Brussel Belgique
-coffe code postal 1000 Bruxelles Belgique
-coffe code postal 1009 Bruxelles Belgique
-coffe code postal 1020 Brussel Belgique
-coffe code postal 1020 Bruxelles Belgique
-coffe code postal 1030 Schaarbeek Belgique
-coffe code postal 1030 Schaerbeek Belgique
-coffe code postal 1040 Brussel Belgique
-coffe code postal 1040 Bruxelles Belgique
-coffe code postal 1040 Etterbeek Belgique
-coffe code postal 1050 Brussel Belgique
-coffe code postal 1050 Bruxelles Belgique
-coffe code postal 1050 Elsene Belgique
-coffe code postal 1050 Ixelles Belgique
-coffe code postal 1060 Saint-Gilles Belgique
-coffe code postal 1060 Sint-Gillis Belgique
-coffe code postal 1070 Anderlecht Belgique
-coffe code postal 1080 Molenbeek-Saint -jean Belgique
-coffe code postal 1080 Sint-Jans-Molenbeek Belgique
-coffe code postal 1080 Brussel Belgique
-coffe code postal 1081 Koekebera Belgique
-coffe code postal 1082 Berchem-Sainte-Agathe Belgique
-coffe code postal 1083 Ganshoren Belgique
-coffe code postal 1090 Jette Belgique
+click_search = wait.until(EC.element_to_be_clickable((By.XPATH, search)))
+click_search.click()
+time.sleep(2)
+click_search = wait.until(EC.element_to_be_clickable((By.XPATH, search)))
+click_search.click()
