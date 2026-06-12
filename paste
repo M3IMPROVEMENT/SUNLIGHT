@@ -1,8 +1,26 @@
+while True:
+    try:
+        wait = WebDriverWait(driver, 20)
+        search_input = '//*[@id="searchboxinput"]'
+        input_field = wait.until(EC.presence_of_element_located((By.XPATH, search_input)))
 
-C:\Users\Sunlight\Desktop\install L\version_high_performance>python googleauto.py
-Folder google scrap data already exists.
-Folder '12-06-2026' already exists.
-DONE !!
-Error in writing search box: {e}
+        driver.execute_script("arguments[0].value = '';", input_field)
+        input_field.click()
+        time.sleep(1)
 
-C:\Users\Sunlight\Desktop\install L\version_high_performance>
+        search_text = each_search.strip()
+        input_field.send_keys(search_text)
+        time.sleep(1)
+        input_field.send_keys(Keys.ENTER)
+        time.sleep(10)
+
+        print("searched:", search_text)
+        break
+
+    except Exception as e:
+        with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+            file.write(f"error in writing search box: {e}")
+
+        print(f"Error in writing search box: {e}")
+        driver.quit()
+        quit()
