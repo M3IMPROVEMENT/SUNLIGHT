@@ -1,5 +1,56 @@
-Rows after EAN/noise cleaning: 17605
-Rows before: 17605
-Rows after: 5648
-Duplicates removed: 11957
-DONE: master_one_folder_final_20260611_145917.xlsx
+import pandas as pd
+import glob
+import os
+
+# Folder that contains all Excel files
+folder_path = "data"   # change this to your folder name
+
+# Final columns wanted by the manager
+final_columns = [
+    "STE", "TVA", "NOM", "ADRESSE", "NUMERO",
+    "COMPLIMENT", "CP", "VILLE", "GSM",
+    "TEL1", "TEL2", "TEL3"
+]
+
+all_data = []
+
+files = glob.glob(os.path.join(folder_path, "*.xlsx"))
+
+for file in files:
+    print("Reading:", file)
+
+    df = pd.read_excel(file)
+
+    # Make column names clean
+    df.columns = df.columns.astype(str).str.strip().str.upper()
+
+    # Keep only wanted columns if they exist
+    df = df[[col for col in final_columns if col in df.columns]]
+
+    # Add missing columns as empty
+    for col in final_columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    # Reorder columns
+    df = df[final_columns]
+
+    all_data.append(df)
+
+# Merge all files
+master = pd.concat(all_data, ignore_index=True)
+
+# Remove fully empty rows
+master = master.dropna(how="all")
+
+# Remove duplicates based on TVA, GSM, TEL1, TEL2, TEL3
+master = master.drop_duplicates(
+    subset=["TVA", "GSM", "TEL1", "TEL2", "TEL3"],
+    keep="first"
+)
+
+# Save final file
+master.to_excel("master_final_table.xlsx", index=False)
+
+print("DONE")
+print("Rows:", len(master))
