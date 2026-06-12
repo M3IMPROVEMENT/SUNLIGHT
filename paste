@@ -1,26 +1,24 @@
-while True:
-    try:
-        wait = WebDriverWait(driver, 20)
-        search_input = '//*[@id="searchboxinput"]'
-        input_field = wait.until(EC.presence_of_element_located((By.XPATH, search_input)))
-
-        driver.execute_script("arguments[0].value = '';", input_field)
-        input_field.click()
-        time.sleep(1)
-
-        search_text = each_search.strip()
-        input_field.send_keys(search_text)
-        time.sleep(1)
-        input_field.send_keys(Keys.ENTER)
-        time.sleep(10)
-
-        print("searched:", search_text)
-        break
-
-    except Exception as e:
-        with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
-            file.write(f"error in writing search box: {e}")
-
-        print(f"Error in writing search box: {e}")
-        driver.quit()
-        quit()
+Folder google scrap data already exists.
+Folder '12-06-2026' already exists.
+DONE !!
+Error in writing search box: Message:
+Stacktrace:
+        chromedriver!GetHandleVerifier [0x7ff64857fd95+15395]
+        chromedriver!GetHandleVerifier [0x7ff64857fdf0+153f0]
+        chromedriver!(No symbol) [0x7ff6480b78fd]
+        chromedriver!(No symbol) [0x7ff648111479]
+        chromedriver!(No symbol) [0x7ff64811177c]
+        chromedriver!(No symbol) [0x7ff648161ef7]
+        chromedriver!(No symbol) [0x7ff64815eaeb]
+        chromedriver!(No symbol) [0x7ff648103a58]
+        chromedriver!(No symbol) [0x7ff648104953]
+        chromedriver!GetHandleVerifier [0x7ff648b45511+5dab11]
+        chromedriver!GetHandleVerifier [0x7ff648b3f8fb+5d4efb]
+        chromedriver!GetHandleVerifier [0x7ff648b63205+5f8805]
+        chromedriver!GetHandleVerifier [0x7ff64859cc6e+3226e]
+        chromedriver!GetHandleVerifier [0x7ff6485a562c+3ac2c]
+        chromedriver!GetHandleVerifier [0x7ff648589984+1ef84]
+        chromedriver!GetHandleVerifier [0x7ff648589b14+1f114]
+        chromedriver!GetHandleVerifier [0x7ff64856ca77+2077]
+        KERNEL32!BaseThreadInitThunk [0x7ff81079e957+17]
+        ntdll!RtlUserThreadStart [0x7ff811b67c1c+2c]
