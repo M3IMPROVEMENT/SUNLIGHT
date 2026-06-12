@@ -1,7 +1,10 @@
+.5)
+ERROR: Could not find a version that satisfies the requirement lmxl (from versions: none)
+ERROR: No matching distribution found for lmxl
+
 C:\Users\Sunlight\Desktop\install L\version_high_performance>python googleauto.py
 Traceback (most recent call last):
-  File "C:\Users\Sunlight\Desktop\install L\version_high_performance\googleauto.py", line 1, in <module>
-    from selenium import webdriver
-ModuleNotFoundError: No module named 'selenium'
+  File "C:\Users\Sunlight\Desktop\install L\version_high_performance\googleauto.py", line 10, in <module>
+    from lxml import html
+ModuleNotFoundError: No module named 'lxml'
 
-C:\Users\Sunlight\Desktop\install L\version_high_performance>
