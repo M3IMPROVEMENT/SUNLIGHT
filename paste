@@ -1,32 +1,7 @@
-while True :
-                try :   
-                    
-                    wait = WebDriverWait(driver, 10)
-                    search_input = '//*[@id="searchboxinput"]'
-                    input_field = wait.until(EC.element_to_be_clickable((By.XPATH, search_input)))
-                    for char in each_search.strip():
-                        input_field.send_keys(char)
-                        time.sleep(random.uniform(0.01, 0.2))
-                    time.sleep(1)
-                    input_field.send_keys(Keys.ENTER)
-                    time.sleep(8)
-                    break
-                except Exception as e:
-                    driver.quit()
-                    quit()
-            print(each_search)
-            # search = '//*[@id="searchbox-searchbutton"]'
+C:\Users\Sunlight\Desktop\install L\version_high_performance>python googleauto.py
+Folder google scrap data already exists.
+Folder '12-06-2026' already exists.
+DONE !!
+Error 2 in clicking search box
 
-            # try :
-                # input_field.send_keys(Keys.ENTER)
-                # time.sleep(5)
-            except Exception as e:
-                with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
-                    file.write(f'error 2 in clicking search {e}')
-                
-
-                print('Error 2 in clicking search box')
-                
-                driver.quit()
-                
-                quit()
+C:\Users\Sunlight\Desktop\install L\version_high_performance>
