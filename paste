@@ -1,123 +1,22 @@
---------------------------------------------------------------------------
-PermissionError                           Traceback (most recent call last)
-Cell In[7], line 22
-     18 
-     19 for file in files:
-     20     print("Reading:", file)
-     21 
----> 22     df = pd.read_excel(file)
-     23 
-     24     # Make column names clean
-     25     df.columns = df.columns.astype(str).str.strip().str.upper()
-
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\io\excel\_base.py:481, in read_excel(io, sheet_name, header, names, index_col, usecols, dtype, engine, converters, true_values, false_values, skiprows, nrows, na_values, keep_default_na, na_filter, verbose, parse_dates, date_format, thousands, decimal, comment, skipfooter, storage_options, dtype_backend, engine_kwargs)
-    479 if not isinstance(io, ExcelFile):
-    480     should_close = True
---> 481     io = ExcelFile(
-    482         io,
-    483         storage_options=storage_options,
-    484         engine=engine,
-    485         engine_kwargs=engine_kwargs,
-    486     )
-    487 elif engine and engine != io.engine:
-    488     raise ValueError(
-    489         "Engine should not be specified when passing "
-    490         "an ExcelFile - ExcelFile already has the engine set"
-    491     )
-
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\io\excel\_base.py:1604, in ExcelFile.__init__(self, path_or_buffer, engine, storage_options, engine_kwargs)
-   1601         ext = "xls"
-   1603 if ext is None:
--> 1604     ext = inspect_excel_format(
-   1605         content_or_path=path_or_buffer, storage_options=storage_options
-   1606     )
-   1607     if ext is None:
-   1608         raise ValueError(
-   1609             "Excel file format cannot be determined, you must specify "
-   1610             "an engine manually."
-   1611         )
-
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\io\excel\_base.py:1452, in inspect_excel_format(content_or_path, storage_options)
-   1417 def inspect_excel_format(
-   1418     content_or_path: FilePath | ReadBuffer[bytes],
-   1419     storage_options: StorageOptions | None = None,
-   1420 ) -> str | None:
-   1421     """
-   1422     Inspect the path or content of an excel file and get its format.
-   1423 
-   (...)   1450         If resulting stream does not have an XLS signature and is not a valid zipfile.
-   1451     """
--> 1452     with get_handle(
-   1453         content_or_path, "rb", storage_options=storage_options, is_text=False
-   1454     ) as handle:
-   1455         stream = handle.handle
-   1456         stream.seek(0)
-
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\io\common.py:939, in get_handle(path_or_buf, mode, encoding, compression, memory_map, is_text, errors, storage_options)
-    930         handle = open(
-    931             handle,
-    932             ioargs.mode,
-   (...)    935             newline="",
-    936         )
-    937     else:
-    938         # Binary mode
---> 939         handle = open(handle, ioargs.mode)
-    940     handles.append(handle)
-    942 # Convert BytesIO or file objects passed with an encoding
-
-PermissionError: [Errno 13] Permission denied: 'C:\\Users\\Sunlight\\Desktop\\test\\~$5000-OR.xlsx'import pandas as pd
-import glob
-import os
-
-# Folder that contains all Excel files
-folder_path = "data"   # change this to your folder name
-
-# Final columns wanted by the manager
-final_columns = [
-    "STE", "TVA", "NOM", "ADRESSE", "NUMERO",
-    "COMPLIMENT", "CP", "VILLE", "GSM",
-    "TEL1", "TEL2", "TEL3"
-]
-
-all_data = []
-
-files = glob.glob(os.path.join(folder_path, "*.xlsx"))
-
-for file in files:
-    print("Reading:", file)
-
-    df = pd.read_excel(file)
-
-    # Make column names clean
-    df.columns = df.columns.astype(str).str.strip().str.upper()
-
-    # Keep only wanted columns if they exist
-    df = df[[col for col in final_columns if col in df.columns]]
-
-    # Add missing columns as empty
-    for col in final_columns:
-        if col not in df.columns:
-            df[col] = ""
-
-    # Reorder columns
-    df = df[final_columns]
-
-    all_data.append(df)
-
-# Merge all files
-master = pd.concat(all_data, ignore_index=True)
-
-# Remove fully empty rows
-master = master.dropna(how="all")
-
-# Remove duplicates based on TVA, GSM, TEL1, TEL2, TEL3
-master = master.drop_duplicates(
-    subset=["TVA", "GSM", "TEL1", "TEL2", "TEL3"],
-    keep="first"
-)
-
-# Save final file
-master.to_excel("master_final_table.xlsx", index=False)
-
-print("DONE")
-print("Rows:", len(master))
+error 2 in clicking search Message: 
+Stacktrace:
+Symbols not available. Dumping unresolved backtrace:
+	0x7ff7e05e8235
+	0x7ff7e05e8290
+	0x7ff7e03c165d
+	0x7ff7e0419a33
+	0x7ff7e0419d3c
+	0x7ff7e046df67
+	0x7ff7e046ac97
+	0x7ff7e040ac29
+	0x7ff7e040ba93
+	0x7ff7e08fffd0
+	0x7ff7e08fa910
+	0x7ff7e0919076
+	0x7ff7e0605734
+	0x7ff7e060e6dc
+	0x7ff7e05f1954
+	0x7ff7e05f1b05
+	0x7ff7e05d7832
+	0x7ffb895ae8d7
+	0x7ffb8a46c53c
