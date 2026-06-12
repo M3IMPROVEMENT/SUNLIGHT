@@ -1,5 +1,5 @@
-click_search = wait.until(EC.element_to_be_clickable((By.XPATH, search)))
-click_search.click()
-time.sleep(2)
-click_search = wait.until(EC.element_to_be_clickable((By.XPATH, search)))
-click_search.click()
+Folder google scrap data already exists.
+C:\Users\Sunlight\Desktop\install L\version_high_performance\googleauto.py:38: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  utc_now = datetime.utcnow()
+Folder '12-06-2026' already exists.
+DONE !!
