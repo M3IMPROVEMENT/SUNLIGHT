@@ -1,22 +1,7 @@
-error 2 in clicking search Message: 
-Stacktrace:
-Symbols not available. Dumping unresolved backtrace:
-	0x7ff7e05e8235
-	0x7ff7e05e8290
-	0x7ff7e03c165d
-	0x7ff7e0419a33
-	0x7ff7e0419d3c
-	0x7ff7e046df67
-	0x7ff7e046ac97
-	0x7ff7e040ac29
-	0x7ff7e040ba93
-	0x7ff7e08fffd0
-	0x7ff7e08fa910
-	0x7ff7e0919076
-	0x7ff7e0605734
-	0x7ff7e060e6dc
-	0x7ff7e05f1954
-	0x7ff7e05f1b05
-	0x7ff7e05d7832
-	0x7ffb895ae8d7
-	0x7ffb8a46c53c
+C:\Users\Sunlight\Desktop\install L\version_high_performance>python googleauto.py
+Traceback (most recent call last):
+  File "C:\Users\Sunlight\Desktop\install L\version_high_performance\googleauto.py", line 1, in <module>
+    from selenium import webdriver
+ModuleNotFoundError: No module named 'selenium'
+
+C:\Users\Sunlight\Desktop\install L\version_high_performance>
