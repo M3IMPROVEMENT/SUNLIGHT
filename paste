@@ -1,6 +1,3 @@
-C:\Users\Sunlight\Desktop\install L\version_high_performance>python googleauto.py
-Folder google scrap data already exists.
-Folder '12-06-2026' already exists.
-DONE !!
-
-C:\Users\Sunlight\Desktop\install L\version_high_performance>
+time.sleep(1)
+input_field.send_keys(Keys.ENTER)
+time.sleep(8)
