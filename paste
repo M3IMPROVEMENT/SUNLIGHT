@@ -1,9 +1,5 @@
-from urllib.parse import quote
 
-search_text = each_search.strip()
-
-driver.get("https://www.google.com/maps/search/" + quote(search_text))
-
-time.sleep(10)
-
-print("searched:", search_text)
+C:\Users\Sunlight\Desktop\install L\version_high_performance>python  google.py
+  File "C:\Users\Sunlight\Desktop\install L\version_high_performance\google.py", line 420
+    search_text = each_search.strip()
+IndentationError: unexpected indent
