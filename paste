@@ -1,4 +1,205 @@
-:\Users\Sunlight\Desktop\install L\version_high_performance>python  google.py
-  File "C:\Users\Sunlight\Desktop\install L\version_high_performance\google.py", line 423
-    driver.quit()
-                 ^
+def searching():
+        with open(f'{os.path.dirname(os.path.realpath(__file__))}/search.txt', 'r', encoding='utf-8') as file:
+            search_all = file.readlines()
+        for each_search in search_all :
+            if search_all.index(each_search) == 1 :
+                driver.quit()
+                quit()
+            all_links = []
+             
+                
+            while True:
+              try:
+                from urllib.parse import quote
+
+                search_text = each_search.strip()
+                driver.get("https://www.google.com/maps/search/" + quote(search_text))
+
+                time.sleep(10)
+                print("searched:", search_text)
+                break
+
+              except Exception as e:
+                 print('Error 1')
+                 print(f'error in link of google map {e}')
+                 with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+                      file.write(f'error in link of google map {e}')
+                driver.quit()
+                quit()
+  
+            time.sleep(random.uniform(3, 5))
+            try:
+                elem = 'https://www.gstatic.com/images/icons/material/system_gm/2x/info_gm_grey_18dp.png'
+                xpath_expression = f"//img[contains(@src, '{elem}')]"
+                element = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, xpath_expression))
+                )
+                src_value = element.get_attribute('src')
+                #print("Found src attribute:", src_value)
+                xpath = driver.execute_script(
+                    "function getXPath(element) {"
+                    "  if (element.id !== '')"
+                    "    return '//*[@id=\"' + element.id + '\"]';"
+                    "  if (element === document.body)"
+                    "    return element.tagName.toLowerCase();"
+                    ""
+                    "  var ix = 0;"
+                    "  var siblings = element.parentNode.childNodes;"
+                    ""
+                    "  for (var i = 0; i < siblings.length; i++) {"
+                    "    var sibling = siblings[i];"
+                    ""
+                    "    if (sibling === element)"
+                    "      return getXPath(element.parentNode) + '/' + element.tagName.toLowerCase() + '[' + (ix + 1) + ']';"
+                    ""
+                    "    if (sibling.nodeType === 1 && sibling.tagName === element.tagName)"
+                    "      ix++;"
+                    "  }"
+                    "}"
+                    "return getXPath(arguments[0]);", element)             
+                scrollnow = xpath.replace('/div[1]/div[1]/img[1]', '/div[2]/div[1]').replace('[1]', '')
+                scrollnow = wait.until(EC.presence_of_element_located((By.XPATH, scrollnow)))
+                scrollnow.click()
+                print('lets scroll now ...')
+            except Exception as e:
+                print(f'error in scroll {e}')
+                pass
+            # Get the current time
+            start_time = datetime.now()
+            lastlinkfound = ''
+            # Set the duration for 25 seconds
+            duration = timedelta(seconds=25)
+            # Calculate the end time
+            end_time = start_time + duration
+            while True:
+                
+                current_url = driver.current_url
+                if current_url.startswith('https://www.google.com/maps/place/') :
+                    all_links.append(current_url)
+                    data_extract(current_url)
+                        
+                    z = 0
+                    break
+                    
+                z = 1
+                print("scrolling")
+                actions = ActionChains(driver)
+                try_scrolling = """
+                    return (() => {
+                        const anchors = Array.from(document.querySelectorAll('a'));
+                        const placeUrl = anchors.find(anchor => 
+                            anchor.href.startsWith('https://www.google.com/maps/place/')
+                        );
+                        
+                        if (placeUrl) {
+                            // Uncomment to scroll to the element first if needed
+                            // placeUrl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            placeUrl.focus();
+                            return 'Focused on URL';
+                        }
+                        return 'URL not found';
+                    })();
+                    """
+                driver.execute_script(try_scrolling)
+                actions.send_keys(Keys.END).perform()
+                text = driver.find_element(By.XPATH, "//body").text
+                end = 'Vous êtes arrivé à la fin de la liste.'
+                end1 = "You've reached the end of the list."
+                try :
+                    links = driver.find_elements(By.TAG_NAME, 'a')
+                    filtered_links = [link.get_attribute('href') for link in links if link.get_attribute('href') and link.get_attribute('href').startswith('https://www.google.com/maps/place/')]
+                    for elem in filtered_links :
+                        all_links.append(elem)
+                except Exception as e:
+                    print("scrolling")
+                    actions = ActionChains(driver)
+                    actions.send_keys(Keys.END).perform()
+                    pass
+                all_links = list(dict.fromkeys(all_links))
+                if len(all_links) == 0 :
+                    break
+                if len(all_links) == 120 :
+                    for lienx in all_links :
+                        try :
+                                data_extract(lienx)
+                        except Exception as e:
+                            print('Error 1')
+                            print(f'error in opening link {lienx} {e}')
+                            with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+                                file.write(f'error in opening link {lienx} {e}')
+                            quit()
+                    
+                    z = 0
+                    break
+                elif end in text:
+                    print('the end')
+                    z = 0
+                    for lienx in all_links :
+                        try :
+                                data_extract(lienx)
+                        except Exception as e:
+                            print('Error 1')
+                            print(f'error in opening link {lienx} {e}')
+                            with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+                                file.write(f'error in opening link {lienx} {e}')
+                            quit()
+                    break
+                elif end1 in text :
+                    print('the end1')
+                    z = 0
+                    for lienx in all_links :
+                        try :
+                                data_extract(lienx)
+                        except Exception as e:
+                            print('Error 1')
+                            print(f'error in opening link {lienx} {e}')
+                            with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+                                file.write(f'error in opening link {lienx} {e}')
+                            quit()
+                    break
+                
+                print(f'trying to fix that : {datetime.now() - end_time}')
+                
+                if datetime.now() > end_time  :
+                    if len(all_links) == 0 :
+                            z = 0
+                    if all_links[-1] == lastlinkfound:
+                        print(f'Total links remained the same after 1 minute: {len(list(dict.fromkeys(all_links)))}')
+                        print('the end2')
+                        for lienx in all_links :
+                            try :
+                                    data_extract(lienx)
+                            except Exception as e:
+                                print('Error 1')
+                                print(f'error in opening link {lienx} {e}')
+                                with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+                                    file.write(f'error in opening link {lienx} {e}')
+                                quit()
+                        z = 0
+                    else:
+                        print(f'One minute has passed. Total links: {len(list(dict.fromkeys(all_links)))}')
+                        if len(all_links) != 0:
+                            lastlinkfound = all_links[-1]
+                            print('last link changed')
+                        if len(all_links) == 0 :
+                            z = 0
+                        # Get the current time
+                        start_time = datetime.now()
+
+                        # Set the duration for 25 seconds
+                        duration = timedelta(seconds=25)
+
+                        # Calculate the end time
+                        end_time = start_time + duration
+                if z == 0 :
+                    break
+            
+try :
+    
+    searching()
+except Exception as e :
+    print(f'error occured while searching  {e}')
+    with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+                    file.write(f'error occured while searching  {e}')
+driver.quit()
+quit()
