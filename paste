@@ -1,48 +1,20 @@
-       
-            while True :
-                try :
-                    
-                    driver.get('https://www.google.com/maps')
-                    break
-                except Exception as e:
-                    print('Error 1')
-                    print(f'error in link of google map {e}')
-                    with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
-                        file.write(f'error in link of google map {e}')
-                    driver.quit()
-                    quit()
-                from urllib.parse import quote
+while True:
+    try:
+        from urllib.parse import quote
 
-                search_text = each_search.strip()
+        search_text = each_search.strip()
+        driver.get("https://www.google.com/maps/search/" + quote(search_text))
 
-                driver.get("https://www.google.com/maps/search/" + quote(search_text))
+        time.sleep(10)
+        print("searched:", search_text)
+        break
 
-                time.sleep(10)
+    except Exception as e:
+        print('Error 1')
+        print(f'error in link of google map {e}')
+        with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+            file.write(f'error in link of google map {e}')
+        driver.quit()
+        quit()
 
-                print("searched:", search_text)
-                
-                driver.quit()
-                
-                quit()
-            time.sleep(random.uniform(3, 5))
-            try:
-                elem = 'https://www.gstatic.com/images/icons/material/system_gm/2x/info_gm_grey_18dp.png'
-                xpath_expression = f"//img[contains(@src, '{elem}')]"
-                element = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, xpath_expression))
-                )
-                src_value = element.get_attribute('src')
-                #print("Found src attribute:", src_value)
-                xpath = driver.execute_script(
-                    "function getXPath(element) {"
-                    "  if (element.id !== '')"
-                    "    return '//*[@id=\"' + element.id + '\"]';"
-                    "  if (element === document.body)"
-                    "    return element.tagName.toLowerCase();"
-                    ""
-                    "  var ix = 0;"
-                    "  var siblings = element.parentNode.childNodes;"
-                    ""
-                    "  for (var i = 0; i < siblings.length; i++) {"
-                    "    var sibling = siblings[i];"
-                    ""
+time.sleep(random.uniform(3, 5))
