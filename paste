@@ -1,20 +1,4 @@
-while True:
-    try:
-        from urllib.parse import quote
-
-        search_text = each_search.strip()
-        driver.get("https://www.google.com/maps/search/" + quote(search_text))
-
-        time.sleep(10)
-        print("searched:", search_text)
-        break
-
-    except Exception as e:
-        print('Error 1')
-        print(f'error in link of google map {e}')
-        with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
-            file.write(f'error in link of google map {e}')
-        driver.quit()
-        quit()
-
-time.sleep(random.uniform(3, 5))
+:\Users\Sunlight\Desktop\install L\version_high_performance>python  google.py
+  File "C:\Users\Sunlight\Desktop\install L\version_high_performance\google.py", line 423
+    driver.quit()
+                 ^
