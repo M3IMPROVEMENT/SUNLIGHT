@@ -1,15 +1,26 @@
 import pandas as pd
+import glob
+import os
 
-# Read the 3 files
-df1 = pd.read_excel(r"C:\Users\Sunlight\Desktop\test\file1.xlsx")
-df2 = pd.read_excel(r"C:\Users\Sunlight\Desktop\test\file2.xlsx")
-df3 = pd.read_excel(r"C:\Users\Sunlight\Desktop\test\file3.xlsx")
+folder_path = r"C:\Users\Sunlight\Desktop\test"
 
-# Merge them
-merged_df = pd.concat([df1, df2, df3], ignore_index=True)
+files = [
+    f for f in glob.glob(os.path.join(folder_path, "*.xlsx"))
+    if not os.path.basename(f).startswith("~$")
+]
 
-# Save the result
-merged_df.to_excel(r"C:\Users\Sunlight\Desktop\test\merged_file.xlsx", index=False)
+all_dfs = []
 
-print("Files merged successfully!")
+for file in files:
+    print("Reading:", os.path.basename(file))
+    df = pd.read_excel(file)
+    all_dfs.append(df)
+
+merged_df = pd.concat(all_dfs, ignore_index=True)
+
+output_file = os.path.join(folder_path, "merged_file.xlsx")
+merged_df.to_excel(output_file, index=False)
+
+print("DONE")
+print("Output:", output_file)
 print("Rows:", len(merged_df))
