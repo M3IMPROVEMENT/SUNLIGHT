@@ -1,3 +1,4 @@
+
 def searching():
         with open(f'{os.path.dirname(os.path.realpath(__file__))}/search.txt', 'r', encoding='utf-8') as file:
             search_all = file.readlines()
@@ -8,26 +9,26 @@ def searching():
             all_links = []
              
                 
-            while True:
-              try:
-                from urllib.parse import quote
+                    while True:
+                        try:
+                            from urllib.parse import quote
 
-                search_text = each_search.strip()
-                driver.get("https://www.google.com/maps/search/" + quote(search_text))
+                            search_text = each_search.strip()
+                            driver.get("https://www.google.com/maps/search/" + quote(search_text))
 
-                time.sleep(10)
-                print("searched:", search_text)
-                break
+                            time.sleep(10)
+                            print("searched:", search_text)
+                            break
 
-              except Exception as e:
-                 print('Error 1')
-                 print(f'error in link of google map {e}')
-                 with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
-                      file.write(f'error in link of google map {e}')
-                driver.quit()
-                quit()
+                        except Exception as e:
+                            print('Error 1')
+                            print(f'error in link of google map {e}')
+                            with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+                            file.write(f'error in link of google map {e}')
+                            driver.quit()
+                            quit()
   
-            time.sleep(random.uniform(3, 5))
+                    time.sleep(random.uniform(3, 5))
             try:
                 elem = 'https://www.gstatic.com/images/icons/material/system_gm/2x/info_gm_grey_18dp.png'
                 xpath_expression = f"//img[contains(@src, '{elem}')]"
