@@ -2,25 +2,47 @@ import pandas as pd
 import glob
 import os
 
-folder_path = r"C:\Users\Sunlight\Desktop\test"
+# Folder that contains all Excel files
+folder_path =r"C:\Users\Sunlight\Desktop\DOSSIE 09-06-2026\3-AB-12-08-2024-TR"   # change this to your folder name
 
-files = [
-    f for f in glob.glob(os.path.join(folder_path, "*.xlsx"))
-    if not os.path.basename(f).startswith("~$")
+# Final columns wanted by the manager
+final_columns = [
+    "STE", "TVA", "NOM", "ADRESSE", "NUMERO",
+    "COMPLIMENT", "CP", "VILLE", "GSM",
+    "TEL 1", "TEL 2", "TEL 3"
 ]
 
-all_dfs = []
+all_data = []
+
+files = glob.glob(os.path.join(folder_path, "*.xlsx"))
 
 for file in files:
-    print("Reading:", os.path.basename(file))
+    print("Reading:", file)
+
     df = pd.read_excel(file)
-    all_dfs.append(df)
 
-merged_df = pd.concat(all_dfs, ignore_index=True)
+    # Make column names clean
+    df.columns = df.columns.astype(str).str.strip().str.upper()
 
-output_file = os.path.join(folder_path, "merged_file.xlsx")
-merged_df.to_excel(output_file, index=False)
+    # Keep only wanted columns if they exist
+    df = df[[col for col in final_columns if col in df.columns]]
+
+    # Add missing columns as empty
+    for col in final_columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    # Reorder columns
+    df = df[final_columns]
+
+    all_data.append(df)
+
+# Merge all files
+master = pd.concat(all_data, ignore_index=True)
+
+
+# Save final file
+master.to_excel("master_final_table.xlsx", index=False)
 
 print("DONE")
-print("Output:", output_file)
-print("Rows:", len(merged_df))
+print("Rows:", len(master))
