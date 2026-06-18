@@ -20,10 +20,3 @@ search_text = each_search.strip()
 driver.get("https://www.google.com/maps/search/" + quote(search_text))
 
 time.sleep(10)
-                
-
-                print('Error 2 in clicking search box')
-                
-                driver.quit()
-                
-                quit()
