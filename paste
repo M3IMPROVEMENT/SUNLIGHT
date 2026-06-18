@@ -12,6 +12,8 @@ search_text = each_search.strip()
 driver.get("https://www.google.com/maps/search/" + quote(search_text))
 
 time.sleep(10)
+
+print("searched:", search_text)
 ##################################
  wait = WebDriverWait(driver, 10)
                     search_input = '//*[@id="searchboxinput"]'
