@@ -3,3 +3,12 @@ from selenium.webdriver.chrome.service import Service
 
 service_obj = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(options=chrome_options, service=service_obj)
+
+########################################
+from urllib.parse import quote
+
+search_text = each_search.strip()
+
+driver.get("https://www.google.com/maps/search/" + quote(search_text))
+
+time.sleep(10)
