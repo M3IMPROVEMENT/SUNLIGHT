@@ -1,27 +1,5 @@
-import pandas as pd
-import glob
-import os
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
 
-folder_path = r"C:\Users\Sunlight\Desktop\FINAL_FILES"
-
-files = glob.glob(os.path.join(folder_path, "*.xlsx"))
-
-all_dfs = []
-
-for file in files:
-    print("Reading:", os.path.basename(file))
-    df = pd.read_excel(file)
-    all_dfs.append(df)
-
-master = pd.concat(all_dfs, ignore_index=True)
-
-# Optional: remove duplicates
-master = master.drop_duplicates()
-
-output_file = os.path.join(folder_path, "MASTER_DATABASE.xlsx")
-
-master.to_excel(output_file, index=False)
-
-print("DONE")
-print("Rows:", len(master))
-print("Saved:", output_file)
+service_obj = Service(ChromeDriverManager().install())
+driver = webdriver.Chrome(options=chrome_options, service=service_obj)
