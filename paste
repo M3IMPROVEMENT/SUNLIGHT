@@ -1,35 +1,48 @@
+import pandas as pd
+import glob
+import os
+
+# Folder that contains all Excel files
+folder_path =r"C:\Users\Sunlight\Desktop\DOSSIE 09-06-2026\18_06_26\TRAITE"   # change this to your folder name
+
+# Final columns wanted by the manager
+final_columns = [
+    "STE", "TVA", "NOM", "ADRESSE", "NUMERO",
+    "COMPLIMENT", "CP", "VILLE", "GSM",
+    "TEL 1", "TEL 2", "TEL 3"
+]
+
+all_data = []
+
+files = glob.glob(os.path.join(folder_path, "*.xlsx"))
+
+for file in files:
+    print("Reading:", file)
+
+    df = pd.read_excel(file)
+
+    # Make column names clean
+    df.columns = df.columns.astype(str).str.strip().str.upper()
+
+    # Keep only wanted columns if they exist
+    df = df[[col for col in final_columns if col in df.columns]]
+
+    # Add missing columns as empty
+    for col in final_columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    # Reorder columns
+    df = df[final_columns]
+
+    all_data.append(df)
+
+# Merge all files
+master = pd.concat(all_data, ignore_index=True)
 
 
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service
+# Save final file
+master.to_excel("master_final_table.xlsx", index=False)
 
-service_obj = Service(ChromeDriverManager().install())
-driver = webdriver.Chrome(options=chrome_options, service=service_obj)
-
-########################################
-from urllib.parse import quote
-
-search_text = each_search.strip()
-
-driver.get("https://www.google.com/maps/search/" + quote(search_text))
-
-time.sleep(10)
-
-print("searched:", search_text)
-##################################
-search_text = each_search.strip()
-
-driver.get("https://www.google.com/maps/search/" + quote(search_text))
-
-time.sleep(10)
-##################
-C:\Users\Sunlight\Desktop\install L_me\version_low_performance>from webdriver_manager.chrome import ChromeDriverManager
-'from' n’est pas reconnu en tant que commande interne
-ou externe, un programme exécutable ou un fichier de commandes.
-
-C:\Users\Sunlight\Desktop\install L_me\version_low_performance>python google.py
-Traceback (most recent call last):
-  File "C:\Users\Sunlight\Desktop\install L_me\version_low_performance\google.py", line 30, in <module>
-    driver = webdriver.Chrome(options=chrome_options, service=service_obj)
-             ^^^^^^^^^
-NameError: name 'webdriver' is not defined
+print("DONE")
+print("Rows:", len(master))
