@@ -12,3 +12,33 @@ search_text = each_search.strip()
 driver.get("https://www.google.com/maps/search/" + quote(search_text))
 
 time.sleep(10)
+##################################
+ wait = WebDriverWait(driver, 10)
+                    search_input = '//*[@id="searchboxinput"]'
+                    input_field = wait.until(EC.element_to_be_clickable((By.XPATH, search_input)))
+                    for char in each_search :
+                        input_field.send_keys(char)
+                        time.sleep(random.uniform(0.01, 0.2))
+                    break
+                except Exception as e:
+                    driver.quit()
+                    quit()
+            print(each_search)
+            search = '//*[@id="searchbox-searchbutton"]'
+
+            try :
+                click_search = wait.until(EC.element_to_be_clickable((By.XPATH, search)))
+                click_search.click()
+                time.sleep(2)
+                click_search = wait.until(EC.element_to_be_clickable((By.XPATH, search)))
+                click_search.click()
+            except Exception as e:
+                with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+                    file.write(f'error 2 in clicking search {e}')
+                
+
+                print('Error 2 in clicking search box')
+                
+                driver.quit()
+                
+                quit()
