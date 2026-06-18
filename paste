@@ -3,7 +3,7 @@ import glob
 import os
 
 # Folder that contains all Excel files
-folder_path =r"C:\Users\Sunlight\Desktop\DOSSIE 09-06-2026\18_06_26\TRAITE"   # change this to your folder name
+folder_path = r"C:\Users\Sunlight\Desktop\DOSSIE 09-06-2026\18_06_26\TRAITE"
 
 # Final columns wanted by the manager
 final_columns = [
@@ -32,14 +32,16 @@ for file in files:
         if col not in df.columns:
             df[col] = ""
 
-    # Reorder columns
-    df = df[final_columns]
+    # Add source file name
+    df["SOURCE"] = os.path.basename(file)
+
+    # Reorder columns with SOURCE at the end
+    df = df[final_columns + ["SOURCE"]]
 
     all_data.append(df)
 
 # Merge all files
 master = pd.concat(all_data, ignore_index=True)
-
 
 # Save final file
 master.to_excel("master_final_table.xlsx", index=False)
