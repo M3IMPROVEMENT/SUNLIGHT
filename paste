@@ -1,3 +1,5 @@
+
+
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 
@@ -20,3 +22,83 @@ search_text = each_search.strip()
 driver.get("https://www.google.com/maps/search/" + quote(search_text))
 
 time.sleep(10)
+##################
+ef searching():
+        with open(f'{os.path.dirname(os.path.realpath(__file__))}/search.txt', 'r', encoding='utf-8') as file:
+            search_all = file.readlines()
+        for each_search in search_all :
+            if search_all.index(each_search) == 1 :
+                driver.quit()
+                quit()
+            all_links = []
+                
+            while True :
+                try :
+                    
+                    driver.get('https://www.google.com/maps')
+                    break
+                except Exception as e:
+                    print('Error 1')
+                    print(f'error in link of google map {e}')
+                    with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+                        file.write(f'error in link of google map {e}')
+                    driver.quit()
+                    quit()
+            while True :
+                try :   
+                    
+                    from urllib.parse import quote
+
+                    search_text = each_search.strip()
+
+                    driver.get("https://www.google.com/maps/search/" + quote(search_text))
+
+                    time.sleep(10)
+                    print("searched:", search_text)
+
+
+           
+        try:
+                elem = 'https://www.gstatic.com/images/icons/material/system_gm/2x/info_gm_grey_18dp.png'
+                xpath_expression = f"//img[contains(@src, '{elem}')]"
+                element = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, xpath_expression))
+                )
+                src_value = element.get_attribute('src')
+                #print("Found src attribute:", src_value)
+                xpath = driver.execute_script(
+                    "function getXPath(element) {"
+                    "  if (element.id !== '')"
+                    "    return '//*[@id=\"' + element.id + '\"]';"
+                    "  if (element === document.body)"
+                    "    return element.tagName.toLowerCase();"
+                    ""
+                    "  var ix = 0;"
+                    "  var siblings = element.parentNode.childNodes;"
+                    ""
+                    "  for (var i = 0; i < siblings.length; i++) {"
+                    "    var sibling = siblings[i];"
+                    ""
+                    "    if (sibling === element)"
+                    "      return getXPath(element.parentNode) + '/' + element.tagName.toLowerCase() + '[' + (ix + 1) + ']';"
+                    ""
+                    "    if (sibling.nodeType === 1 && sibling.tagName === element.tagName)"
+                    "      ix++;"
+                    "  }"
+                    "}"
+                    "return getXPath(arguments[0]);", element)             
+                scrollnow = xpath.replace('/div[1]/div[1]/img[1]', '/div[2]/div[1]').replace('[1]', '')
+                scrollnow = wait.until(EC.presence_of_element_located((By.XPATH, scrollnow)))
+                scrollnow.click()
+                print('lets scroll now ...')
+            except Exception as e:
+                print(f'error in scroll {e}')
+                pass
+            # Get the current time
+            start_time = datetime.now()
+            lastlinkfound = ''
+            # Set the duration for 25 seconds
+            duration = timedelta(seconds=25)
+            # Calculate the end time
+            end_time = start_time + duration
+            while True:
