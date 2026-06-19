@@ -1,1 +1,21 @@
-file_path = os.path.join(output_folder, f"data_yelp_{file_name}.xlsx")
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+import time
+
+driver = webdriver.Chrome(
+    service=Service(ChromeDriverManager().install())
+)
+
+driver.get("PASTE_ONE_YELP_BUSINESS_LINK_HERE")
+
+time.sleep(5)
+
+body_text = driver.find_element(By.TAG_NAME, "body").text
+
+print(body_text)
+
+input("Press Enter to close...")
+
+driver.quit()
