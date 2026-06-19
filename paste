@@ -1,50 +1,146 @@
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
+from urllib.parse import quote
 import pandas as pd
-import glob
+import time
 import os
+import re
+from datetime import datetime
 
-# Folder that contains all Excel files
-folder_path = r"C:\Users\Sunlight\Desktop\DOSSIE 09-06-2026\18_06_26\TRAITE"
+BASE_DIR = os.path.dirname(os.path.realpath(__file__))
 
-# Final columns wanted by the manager
-final_columns = [
-    "STE", "TVA", "NOM", "ADRESSE", "NUMERO",
-    "COMPLIMENT", "CP", "VILLE", "GSM",
-    "TEL 1", "TEL 2", "TEL 3"
-]
+chrome_options = webdriver.ChromeOptions()
+chrome_options.add_experimental_option("useAutomationExtension", False)
+chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
-all_data = []
+service_obj = Service(ChromeDriverManager().install())
+driver = webdriver.Chrome(options=chrome_options, service=service_obj)
 
-files = glob.glob(os.path.join(folder_path, "*.xlsx"))
+today = datetime.now().strftime("%d-%m-%Y")
+output_folder = os.path.join(BASE_DIR, "yelp scrap data", today)
+os.makedirs(output_folder, exist_ok=True)
 
-for file in files:
-    print("Reading:", file)
+with open(os.path.join(BASE_DIR, "search.txt"), "r", encoding="utf-8") as file:
+    searches = file.readlines()
 
-    df = pd.read_excel(file)
+def clean_phone(phone):
+    if not phone:
+        return "", ""
 
-    # Make column names clean
-    df.columns = df.columns.astype(str).str.strip().str.upper()
+    raw = phone.replace(" ", "").replace(".", "").replace("-", "")
 
-    # Keep only wanted columns if they exist
-    df = df[[col for col in final_columns if col in df.columns]]
+    if raw.startswith("+32"):
+        raw = raw.replace("+32", "0", 1)
 
-    # Add missing columns as empty
-    for col in final_columns:
-        if col not in df.columns:
-            df[col] = ""
+    telephone = ""
+    gsm = ""
 
-    # Add source file name
-    df["SOURCE"] = os.path.basename(file)
+    if raw.startswith("04") or raw.startswith("4"):
+        gsm = raw
+    else:
+        telephone = raw
 
-    # Reorder columns with SOURCE at the end
-    df = df[final_columns + ["SOURCE"]]
+    return telephone, gsm
 
-    all_data.append(df)
+def extract_business(url, file_path):
+    driver.get(url)
+    time.sleep(4)
 
-# Merge all files
-master = pd.concat(all_data, ignore_index=True)
+    body_text = driver.find_element(By.TAG_NAME, "body").text
 
-# Save final file
-master.to_excel("master_final_table.xlsx", index=False)
+    try:
+        name = driver.find_element(By.TAG_NAME, "h1").text
+    except:
+        name = ""
 
+    phone_match = re.search(r"(\+32\s?\d[\d\s\.]+|0\d[\d\s\.]+)", body_text)
+    phone = phone_match.group(0).strip() if phone_match else ""
+
+    telephone, gsm = clean_phone(phone)
+
+    address = ""
+    postal_code = ""
+
+    postal_match = re.search(r"\b(1\d{3})\b", body_text)
+    if postal_match:
+        postal_code = postal_match.group(1)
+
+    lines = body_text.split("\n")
+    for line in lines:
+        if postal_code and postal_code in line:
+            address = line
+            break
+
+    rating = ""
+    rating_match = re.search(r"(\d,\d|\d\.\d|\d) étoiles", body_text)
+    if rating_match:
+        rating = rating_match.group(1)
+
+    website = ""
+    for link in driver.find_elements(By.TAG_NAME, "a"):
+        href = link.get_attribute("href")
+        if href and "biz_redir" in href:
+            website = href
+            break
+
+    data = {
+        "name": name,
+        "code postal": postal_code,
+        "adresse": address,
+        "phone": phone,
+        "telephone": telephone,
+        "GSM": gsm,
+        "website": website,
+        "category": "",
+        "rating": rating,
+        "total_of_rating": "",
+        "yelp_link": url,
+    }
+
+    if phone:
+        if os.path.exists(file_path):
+            df = pd.read_excel(file_path)
+            df = pd.concat([df, pd.DataFrame([data])], ignore_index=True)
+        else:
+            df = pd.DataFrame([data])
+
+        df.to_excel(file_path, index=False)
+        print("SAVED:", name)
+
+def search_yelp(search_text):
+    file_name = search_text.replace("/", "_").replace("\\", "_")
+    file_path = os.path.join(output_folder, f"data_yelp_{file_name}.xlsx")
+
+    search_url = "https://fr.yelp.be/search?find_desc=" + quote(search_text) + "&find_loc=Bruxelles"
+    driver.get(search_url)
+    time.sleep(6)
+
+    links = driver.find_elements(By.TAG_NAME, "a")
+    business_links = []
+
+    for link in links:
+        href = link.get_attribute("href")
+        if href and "/biz/" in href and "fr.yelp.be" in href:
+            href = href.split("?")[0]
+            business_links.append(href)
+
+    business_links = list(dict.fromkeys(business_links))
+
+    print("Found links:", len(business_links))
+
+    for url in business_links:
+        try:
+            extract_business(url, file_path)
+        except Exception as e:
+            print("Error extracting:", url, e)
+
+for search in searches:
+    search = search.strip()
+    if search:
+        print("SEARCHING:", search)
+        search_yelp(search)
+
+driver.quit()
 print("DONE")
-print("Rows:", len(master))
