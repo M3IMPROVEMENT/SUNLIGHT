@@ -1,167 +1,66 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
-from urllib.parse import quote
-import pandas as pd
-import time
-import os
-import re
-from datetime import datetime
-
-BASE_DIR = os.path.dirname(os.path.realpath(__file__))
-TODAY = datetime.now().strftime("%d-%m-%Y")
-
-OUTPUT_DIR = os.path.join(BASE_DIR, "yelp scrap data", TODAY)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-options = webdriver.ChromeOptions()
-options.add_experimental_option("excludeSwitches", ["enable-automation"])
-options.add_experimental_option("useAutomationExtension", False)
-
-driver = webdriver.Chrome(
-    service=Service(ChromeDriverManager().install()),
-    options=options
-)
-
-def clean_phone(phone):
-    if not phone:
-        return "", "", ""
-
-    phone = re.sub(r"[^0-9+]", "", phone)
-
-    if phone.startswith("+32"):
-        phone = "0" + phone[3:]
-
-    telephone = ""
-    gsm = ""
-
-    if phone.startswith("04"):
-        gsm = phone
-    elif phone.startswith(("02", "03", "09")):
-        telephone = phone
-    else:
-        telephone = phone
-
-    return phone, telephone, gsm
-
-
-def extract_phone(text):
-    patterns = [
-        r"\+32[\s\./-]?\d[\d\s\./-]{7,15}",
-        r"0\d[\d\s\./-]{7,15}"
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(0).strip()
-
-    return ""
-
-
-def extract_business(url, output_file):
-    driver.get(url)
-    time.sleep(4)
-
-    text = driver.find_element(By.TAG_NAME, "body").text
-
-    try:
-        name = driver.find_element(By.TAG_NAME, "h1").text
-    except:
-        name = ""
-
-    raw_phone = extract_phone(text)
-    phone, telephone, gsm = clean_phone(raw_phone)
-
-    print("RAW PHONE FOUND:", raw_phone)
-    print("CLEAN PHONE:", phone)
-    print("TEL:", telephone)
-    print("GSM:", gsm)
-
-    postal_code = ""
-    postal_match = re.search(r"\b\d{4}\b", text)
-    if postal_match:
-        postal_code = postal_match.group(0)
-
-    address = ""
-    for line in text.split("\n"):
-        if postal_code and postal_code in line:
-            address = line
-            break
-
-    rating = ""
-    rating_match = re.search(r"(\d+[,.]?\d*)\s*(étoiles|star|stars)", text, re.IGNORECASE)
-    if rating_match:
-        rating = rating_match.group(1)
-
-    website = ""
-    for a in driver.find_elements(By.TAG_NAME, "a"):
-        href = a.get_attribute("href")
-        if href and "biz_redir" in href:
-            website = href
-            break
-
-    data = {
-        "name": name,
-        "code postal": postal_code,
-        "adresse": address,
-        "phone": phone,
-        "telephone": telephone,
-        "GSM": gsm,
-        "website": website,
-        "category": "",
-        "rating": rating,
-        "total_of_rating": "",
-        "yelp_link": url,
-    }
-
-    if os.path.exists(output_file):
-        df = pd.read_excel(output_file, dtype=str)
-        df = pd.concat([df, pd.DataFrame([data])], ignore_index=True)
-    else:
-        df = pd.DataFrame([data])
-
-    for col in ["phone", "telephone", "GSM"]:
-        df[col] = df[col].fillna("").astype(str)
-
-    df.to_excel(output_file, index=False)
-    print("Saved:", name)
-
-
-def search_yelp(search_text):
-    safe_name = search_text.replace("/", "_").replace("\\", "_")
-    output_file = os.path.join(OUTPUT_DIR, f"data_yelp_{safe_name}.xlsx")
-
-    url = "https://fr.yelp.be/search?find_desc=" + quote(search_text) + "&find_loc=Bruxelles"
-    driver.get(url)
-    time.sleep(6)
-
-    links = []
-    for a in driver.find_elements(By.TAG_NAME, "a"):
-        href = a.get_attribute("href")
-        if href and "/biz/" in href and "fr.yelp.be" in href:
-            href = href.split("?")[0]
-            links.append(href)
-
-    links = list(dict.fromkeys(links))
-    print("Businesses found:", len(links))
-
-    for link in links:
-        try:
-            extract_business(link, output_file)
-        except Exception as e:
-            print("Error:", link, e)
-
-
-with open(os.path.join(BASE_DIR, "search.txt"), "r", encoding="utf-8") as f:
-    searches = f.readlines()
-
-for search in searches:
-    search = search.strip()
-    if search:
-        print("Searching:", search)
-        search_yelp(search)
-
-driver.quit()
-print("DONE")
+C:\Users\Sunlight\Desktop\YELP\YELP>python yelp.py
+Searching: hotels Bruxelles
+Businesses found: 11
+RAW PHONE FOUND:
+CLEAN PHONE:
+TEL:
+GSM:
+Saved: Motel One Bruxelles
+RAW PHONE FOUND: 04
+57
+29
+CLEAN PHONE: 045729
+TEL:
+GSM: 045729
+Saved: Novotel Bruxelles Centre - Tour Noire
+RAW PHONE FOUND: 09
+529
+268
+6
+CLEAN PHONE: 095292686
+TEL: 095292686
+GSM:
+Saved: Vintage Hotel
+RAW PHONE FOUND:
+CLEAN PHONE:
+TEL:
+GSM:
+Saved: Chambres d'Hôtes du Vaudeville
+RAW PHONE FOUND:
+CLEAN PHONE:
+TEL:
+GSM:
+Saved: Hotel ibis Brussels off Grand Place
+RAW PHONE FOUND: 056
+3793
+26
+CLEAN PHONE: 056379326
+TEL: 056379326
+GSM:
+Saved: Stanhope Hotel
+RAW PHONE FOUND:
+CLEAN PHONE:
+TEL:
+GSM:
+Saved: Brighton Restaurant
+RAW PHONE FOUND:
+CLEAN PHONE:
+TEL:
+GSM:
+Saved: Melia Avenue Louise Boutique Hotel, Sol Melia Benelux
+RAW PHONE FOUND:
+CLEAN PHONE:
+TEL:
+GSM:
+Saved: Belgien in alten Ansichten
+RAW PHONE FOUND:
+CLEAN PHONE:
+TEL:
+GSM:
+Saved: Hôtel Alma Grand Place
+RAW PHONE FOUND:
+CLEAN PHONE:
+TEL:
+GSM:
+Saved: Auberge St Michel
+DONE
