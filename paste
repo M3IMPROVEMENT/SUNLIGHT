@@ -1,1 +1,18 @@
-    r"(\+32[\s\.]?\d[\d\s\.\-/]{6,}|0[1-9][\d\s\.\-/]{6,})",
+def clean_phone(phone):
+    if not phone:
+        return "", ""
+
+    raw = phone.replace(" ", "").replace(".", "").replace("-", "").replace("/", "")
+
+    if raw.startswith("+32"):
+        raw = "0" + raw[3:]
+
+    telephone = ""
+    gsm = ""
+
+    if raw.startswith("04") or raw.startswith("4"):
+        gsm = raw
+    else:
+        telephone = raw
+
+    return telephone, gsm
