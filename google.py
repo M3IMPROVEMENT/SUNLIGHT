@@ -1,29 +1,34 @@
+import selenium # type: ignore
+from selenium.webdriver.chrome.service import Service # type: ignore # type: ignore
+from selenium.webdriver.support.ui import WebDriverWait # type: ignore
+from selenium.webdriver.support import expected_conditions as EC # type: ignore
+from selenium.webdriver.common.by import By # type: ignore
+from selenium.webdriver.common.keys import Keys # type: ignore
+from selenium.webdriver.common.action_chains import ActionChains # type: ignore
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.action_chains import ActionChains
 import time
 import random
-from lxml import html
-import pandas as pd
+from lxml import html # type: ignore
+import pandas as pd # type: ignore
 import re
 import os
 from datetime import datetime
 import pytz
 from datetime import datetime
+from datetime import UTC
 from datetime import datetime, timedelta
 import subprocess
+from webdriver_manager.chrome import ChromeDriverManager
 
 
-
-chrome_options = webdriver.ChromeOptions()
+chrome_options = selenium.webdriver.ChromeOptions()
 chrome_options.add_experimental_option("useAutomationExtension", False)
 chrome_options.add_experimental_option("excludeSwitches",["enable-automation"])
-service_obj = Service(f"{os.path.dirname(os.path.realpath(__file__))}/chromedriver.exe")
-driver = webdriver.Chrome(options=chrome_options,service=service_obj)
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
+
+service_obj = Service(ChromeDriverManager().install())
+driver = webdriver.Chrome(options=chrome_options, service=service_obj)
 
 
 
@@ -37,7 +42,7 @@ except FileExistsError:
 with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
         file.write('')
 # Get current time in UTC
-utc_now = datetime.utcnow()
+utc_now = datetime.now(UTC)
 
 # Define the time zone for Morocco
 morocco_timezone = pytz.timezone('Africa/Casablanca')
@@ -406,7 +411,7 @@ def searching():
             while True :
                 try :
                     
-                    driver.get('https://https://www.google.com/maps')
+                    driver.get('https://www.google.com/maps')
                     break
                 except Exception as e:
                     print('Error 1')
@@ -418,37 +423,24 @@ def searching():
             while True :
                 try :   
                     
-                    wait = WebDriverWait(driver, 10)
-                    search_input = '//*[@id="searchboxinput"]'
-                    input_field = wait.until(EC.element_to_be_clickable((By.XPATH, search_input)))
-                    for char in each_search :
-                        input_field.send_keys(char)
-                        time.sleep(random.uniform(0.01, 0.2))
+                    from urllib.parse import quote
+
+                    search_text = each_search.strip()
+
+                    driver.get("https://www.google.com/maps/search/" + quote(search_text))
+
+                    time.sleep(10)
+                    print("searched:", search_text)
                     break
                 except Exception as e:
+                    print(f"error in search{e}")
                     driver.quit()
                     quit()
-            print(each_search)
-            search = '//*[@id="searchbox-searchbutton"]'
+            wait = WebDriverWait(driver, 10)  
 
-            try :
-                click_search = wait.until(EC.element_to_be_clickable((By.XPATH, search)))
-                click_search.click()
-                time.sleep(2)
-                click_search = wait.until(EC.element_to_be_clickable((By.XPATH, search)))
-                click_search.click()
-            except Exception as e:
-                with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
-                    file.write(f'error 2 in clicking search {e}')
-                
 
-                print('Error 2 in clicking search box')
-                
-                driver.quit()
-                
-                quit()
-            time.sleep(random.uniform(3, 5))
-            try:
+           
+        try:
                 elem = 'https://www.gstatic.com/images/icons/material/system_gm/2x/info_gm_grey_18dp.png'
                 xpath_expression = f"//img[contains(@src, '{elem}')]"
                 element = WebDriverWait(driver, 10).until(
@@ -481,20 +473,20 @@ def searching():
                 scrollnow = wait.until(EC.presence_of_element_located((By.XPATH, scrollnow)))
                 scrollnow.click()
                 print('lets scroll now ...')
-            except Exception as e:
+        except Exception as e:
                 print(f'error in scroll {e}')
                 pass
             # Get the current time
-            start_time = datetime.now()
-            lastlinkfound = ''
+        start_time = datetime.now()
+        lastlinkfound = ''
             # Set the duration for 25 seconds
-            duration = timedelta(seconds=25)
+        duration = timedelta(seconds=25)
             # Calculate the end time
-            end_time = start_time + duration
-            while True:
+        end_time = start_time + duration
+        while True:
                 
                 current_url = driver.current_url
-                if current_url.startswith('https://https://www.google.com/maps/place/') :
+                if current_url.startswith('https://www.google.com/maps/place/') :
                     all_links.append(current_url)
                     data_extract(current_url)
                         
@@ -508,7 +500,7 @@ def searching():
                     return (() => {
                         const anchors = Array.from(document.querySelectorAll('a'));
                         const placeUrl = anchors.find(anchor => 
-                            anchor.href.startsWith('https://https://www.google.com/maps/place/')
+                            anchor.href.startsWith('https://www.google.com/maps/place/')
                         );
                         
                         if (placeUrl) {
@@ -527,7 +519,7 @@ def searching():
                 end1 = "You've reached the end of the list."
                 try :
                     links = driver.find_elements(By.TAG_NAME, 'a')
-                    filtered_links = [link.get_attribute('href') for link in links if link.get_attribute('href') and link.get_attribute('href').startswith('https://https://www.google.com/maps/place/')]
+                    filtered_links = [link.get_attribute('href') for link in links if link.get_attribute('href') and link.get_attribute('href').startswith('https://www.google.com/maps/place/')]
                     for elem in filtered_links :
                         all_links.append(elem)
                 except Exception as e:

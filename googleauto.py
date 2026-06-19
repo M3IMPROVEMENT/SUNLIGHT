@@ -14,20 +14,13 @@ import os
 from datetime import datetime
 import pytz
 from datetime import datetime
+from datetime import UTC
 from datetime import datetime, timedelta
 import subprocess
 
-
-chrome_options = webdriver.ChromeOptions()
-chrome_options.add_experimental_option("useAutomationExtension", False)
-chrome_options.add_experimental_option("excludeSwitches",["enable-automation"])
-service_obj = Service(f"{os.path.dirname(os.path.realpath(__file__))}/chromedriver.exe")
-driver = webdriver.Chrome(options=chrome_options,service=service_obj)
-
-
 # Create the folder
 try:
-    os.mkdir(f'{os.path.dirname(os.path.realpath(__file__))}/google scrap data')
+    os.mkdir(f'{os.path.dirname(os.path.realpath(__file__))}/google scrap data')  
     print(f"Folder google scrap data created successfully.")
 except FileExistsError:
     print(f"Folder google scrap data already exists.")   
@@ -35,7 +28,7 @@ except FileExistsError:
 with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
         file.write('')
 # Get current time in UTC
-utc_now = datetime.utcnow()
+utc_now = datetime.now(UTC)
 
 # Define the time zone for Morocco
 morocco_timezone = pytz.timezone('Africa/Casablanca')
@@ -53,7 +46,6 @@ try:
 except FileExistsError:
     print(f"Folder '{folder_name}' already exists.")      
 
-
 def remove_line(line_to_remove):
     file_path = f'{os.path.dirname(os.path.realpath(__file__))}/searchauto.txt'
     with open(file_path, "r", encoding="utf-8") as file:
@@ -63,7 +55,8 @@ def remove_line(line_to_remove):
         for line in lines:
             if line.strip() != line_to_remove.strip():
                 file.write(line)
-                
+
+          
 def extract_code_postal():
     with open(f'{os.path.dirname(os.path.realpath(__file__))}/searchauto.txt', 'r', encoding='utf-8') as file:
         all_lines = file.readlines()
@@ -121,6 +114,7 @@ def extract_code_postal():
         print('Error in store_code_postal function:', e)
 extract_code_postal()
         
+        
 def extract_string_before_code_postal(input_string):
     # Split the input string using "code postal" as the delimiter
     parts = input_string.split("code postal", 1)
@@ -148,7 +142,6 @@ def storing() :
 
 with open(f'{os.path.dirname(os.path.realpath(__file__))}/searchauto.txt', 'r', encoding='utf-8') as file:
             Fline1 = file.readline()
-            
 name = extract_string_before_code_postal(Fline1)
 
 file_path = f'{os.path.dirname(os.path.realpath(__file__))}/google scrap data/{folder_name}/data {name} belgique.xlsx'
@@ -186,7 +179,7 @@ def check_code_postal(code) :
     except Exception as e :
         print('Error processing code ...')
         return False 
-
+    
 def store_all_links(url):
     try:
         file_path = f'{os.path.dirname(os.path.realpath(__file__))}/google scrap data/{folder_name}/cleaner {name} belgique.xlsx'
@@ -213,7 +206,7 @@ def store_all_links(url):
             print('DONE store_link ... !!')
     except Exception as e:
         print('Error in store_all_links function:', e)
- 
+        
 def data_extract(url):
     store_all_links(url)
     global driver
@@ -240,7 +233,6 @@ def data_extract(url):
             print(f'error in opening link {url} {e}')
             with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
                 file.write(f'error in opening link {url} {e}')
-            driver.quit()
             quit()
     
     with open(f'{os.path.dirname(os.path.realpath(__file__))}/last_link.txt', 'w', encoding='utf-8') as file:
@@ -392,7 +384,7 @@ def data_extract(url):
             break
     
 
-    wait = WebDriverWait(driver, 1)
+    
 
     try :
 
@@ -460,7 +452,7 @@ def data_extract(url):
 
         }
         
-
+        
         try : 
             if check_code_postal(code_postal) :
                 file_path = storing()
@@ -485,6 +477,67 @@ def data_extract(url):
         except Exception as e:
             print("Error in code postal :", e)
             pass
+        
+
+        # try : 
+        #     with open(f'{os.path.dirname(os.path.realpath(__file__))}/searchauto.txt', 'r', encoding='utf-8') as file:
+        #         all_lines = file.readlines()
+
+        #     # Use regex to find the first number in the line
+                
+        #     for line in all_lines :
+        #         match = re.search(r'\b\d+\b', line)
+
+        #         if match:
+        #             codpostal = str(int(match.group()))
+                    
+        #             if code_postal == codpostal :
+        #                 print("code postal found !!!")
+        #                 break
+
+        #     if code_postal == codpostal :
+            
+        #         with open(f'{os.path.dirname(os.path.realpath(__file__))}/searchauto.txt', 'r', encoding='utf-8') as file:
+        #             Fline1 = file.readline()
+                
+        #         #match = re.search(r'(.+?)\s+\b\d+\b', name)
+
+        #         #if match:
+        #             #name = match.group(1)
+
+        #         def extract_string_before_code_postal(input_string):
+        #             # Split the input string using "code postal" as the delimiter
+        #             parts = input_string.split("code postal", 1)
+
+        #             # Extract the part of the string before "code postal"
+        #             string_before_code_postal = parts[0].strip()
+
+        #             return string_before_code_postal
+        #         name = extract_string_before_code_postal(Fline1)
+
+        #         file_path = f'{os.path.dirname(os.path.realpath(__file__))}/google scrap data/{folder_name}/data {name} belgique.xlsx'
+
+        #         # Check if the file exists
+        #         if os.path.exists(file_path):
+        #             # Read existing data from the Excel file
+        #             existing_df = pd.read_excel(file_path)
+
+        #             # Create a new DataFrame with the new data
+        #             new_df = pd.DataFrame([data])
+
+        #             # Concatenate the existing DataFrame and the new DataFrame
+        #             updated_df = pd.concat([existing_df, new_df], ignore_index=True)
+        #         else:
+        #             # If the file doesn't exist, create a new DataFrame with the new data
+        #             updated_df = pd.DataFrame([data])
+
+        #         # Save the updated DataFrame to the Excel file
+        #         updated_df.to_excel(file_path, index=False)
+
+        #         print('DONE !!')
+        # except Exception as e:
+        #     print("Error in code postal :", e)
+        #     pass
 
 
 
@@ -500,7 +553,15 @@ def searching():
                 
             while True :
                 try :
-                    
+                    chrome_options = webdriver.ChromeOptions()
+                    chrome_options.add_experimental_option("useAutomationExtension", False)
+                    chrome_options.add_experimental_option("excludeSwitches",["enable-automation"])
+                    from webdriver_manager.chrome import ChromeDriverManager
+                    from selenium.webdriver.chrome.service import Service
+
+                    service_obj = Service(ChromeDriverManager().install())
+                    driver = webdriver.Chrome(options=chrome_options, service=service_obj)
+                    print
                     driver.get('https://www.google.com/maps')
                     break
                 except Exception as e:
@@ -513,35 +574,22 @@ def searching():
             while True :
                 try :   
                     
-                    wait = WebDriverWait(driver, 10)
-                    search_input = '//*[@id="searchboxinput"]'
-                    input_field = wait.until(EC.element_to_be_clickable((By.XPATH, search_input)))
-                    for char in each_search[:-1]:
-                        input_field.send_keys(char)
-                        time.sleep(random.uniform(0.01, 0.2))
+                    from urllib.parse import quote
+
+                    search_text = each_search.strip()
+
+                    driver.get("https://www.google.com/maps/search/" + quote(search_text))
+
+                    time.sleep(10)
+
+                    print("searched:", search_text)
                     break
                 except Exception as e:
+                    print(f"error in search {e}")
                     driver.quit()
                     quit()
-            print(each_search)
-            search = '//*[@id="searchbox-searchbutton"]'
-
-            try :
-                click_search = wait.until(EC.element_to_be_clickable((By.XPATH, search)))
-                click_search.click()
-                time.sleep(2)
-                click_search = wait.until(EC.element_to_be_clickable((By.XPATH, search)))
-                click_search.click()
-            except Exception as e:
-                with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
-                    file.write(f'error 2 in clicking search {e}')
+            wait = WebDriverWait(driver, 10)        
                 
-
-                print('Error 2 in clicking search box')
-                
-                driver.quit()
-                
-                quit()
             try:
                 elem = 'https://www.gstatic.com/images/icons/material/system_gm/2x/info_gm_grey_18dp.png'
                 xpath_expression = f"//img[contains(@src, '{elem}')]"
@@ -570,7 +618,8 @@ def searching():
                     "      ix++;"
                     "  }"
                     "}"
-                    "return getXPath(arguments[0]);", element)             
+                    "return getXPath(arguments[0]);", element)
+                
                 scrollnow = xpath.replace('/div[1]/div[1]/img[1]', '/div[2]/div[1]').replace('[1]', '')
                 scrollnow = wait.until(EC.presence_of_element_located((By.XPATH, scrollnow)))
                 scrollnow.click()
@@ -586,7 +635,7 @@ def searching():
             # Calculate the end time
             end_time = start_time + duration
             while True:
-                
+                z = 1
                 current_url = driver.current_url
                 if current_url.startswith('https://www.google.com/maps/place/') :
                     all_links.append(current_url)
@@ -594,19 +643,20 @@ def searching():
                         try :
                             data_extract(current_url)
                         except Exception as e :
+                                            
                             print('Error 1')
-                            print(f'error in opening link {lienx} {e}')
+                            print(f'error in opening link {current_url} {e}')
                             with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
-                                file.write(f'error in opening link {lienx} {e}')
+                                file.write(f'error in opening link {current_url} {e}')
                             quit()
-                        
+                    
                     z = 0
                     remove_line(each_search)
                     break
-                    
-                z = 1
+                
                 print("scrolling")
                 actions = ActionChains(driver)
+
                 try_scrolling = """
                     return (() => {
                         const anchors = Array.from(document.querySelectorAll('a'));
@@ -624,10 +674,13 @@ def searching():
                     })();
                     """
                 driver.execute_script(try_scrolling)
+                print('send focus')
                 actions.send_keys(Keys.END).perform()
                 text = driver.find_element(By.XPATH, "//body").text
+                print('send focus done')
                 end = 'Vous êtes arrivé à la fin de la liste.'
                 end1 = "You've reached the end of the list."
+                time.sleep(random.uniform(0.5, 1)) 
                 try :
                     links = driver.find_elements(By.TAG_NAME, 'a')
                     filtered_links = [link.get_attribute('href') for link in links if link.get_attribute('href') and link.get_attribute('href').startswith('https://www.google.com/maps/place/')]
@@ -643,10 +696,28 @@ def searching():
                     remove_line(each_search)
                     break
                 if len(all_links) == 120 :
+                    chrome_options = webdriver.ChromeOptions()
+                    chrome_options.add_experimental_option("useAutomationExtension", False)
+                    chrome_options.add_experimental_option("excludeSwitches",["enable-automation"])
+                    from webdriver_manager.chrome import ChromeDriverManager
+                    from selenium.webdriver.chrome.service import Service
+
+                    service_obj = Service(ChromeDriverManager().install())
+                    driver = webdriver.Chrome(options=chrome_options, service=service_obj)
                     for lienx in all_links :
                         try :
                             if check_url(lienx) == False :
+                                if all_links.index(lienx) % 10 == 0 and all_links.index(lienx) != 0:
+                                    chrome_options = webdriver.ChromeOptions()
+                                    chrome_options.add_experimental_option("useAutomationExtension", False)
+                                    chrome_options.add_experimental_option("excludeSwitches",["enable-automation"])
+                                    from webdriver_manager.chrome import ChromeDriverManager
+                                    from selenium.webdriver.chrome.service import Service
+
+                                    service_obj = Service(ChromeDriverManager().install())
+                                    driver = webdriver.Chrome(options=chrome_options, service=service_obj)
                                 data_extract(lienx)
+                            
                         except Exception as e:
                             print('Error 1')
                             print(f'error in opening link {lienx} {e}')
@@ -654,15 +725,33 @@ def searching():
                                 file.write(f'error in opening link {lienx} {e}')
                             quit()
                     remove_line(each_search)
-                    
                     z = 0
                     break
                 elif end in text:
                     print('the end')
+                    
                     z = 0
+                    chrome_options = webdriver.ChromeOptions()
+                    chrome_options.add_experimental_option("useAutomationExtension", False)
+                    chrome_options.add_experimental_option("excludeSwitches",["enable-automation"])
+                    from webdriver_manager.chrome import ChromeDriverManager
+                    from selenium.webdriver.chrome.service import Service
+
+                    service_obj = Service(ChromeDriverManager().install())
+                    driver = webdriver.Chrome(options=chrome_options, service=service_obj)
+                    driver_pid = driver.session_id
                     for lienx in all_links :
                         try :
                             if check_url(lienx) == False :
+                                if all_links.index(lienx) % 10 == 0 and all_links.index(lienx) != 0:
+                                    chrome_options = webdriver.ChromeOptions()
+                                    chrome_options.add_experimental_option("useAutomationExtension", False)
+                                    chrome_options.add_experimental_option("excludeSwitches",["enable-automation"])
+                                    from webdriver_manager.chrome import ChromeDriverManager
+                                    from selenium.webdriver.chrome.service import Service
+
+                                    service_obj = Service(ChromeDriverManager().install())
+                                    driver = webdriver.Chrome(options=chrome_options, service=service_obj)
                                 data_extract(lienx)
                         except Exception as e:
                             print('Error 1')
@@ -671,13 +760,29 @@ def searching():
                                 file.write(f'error in opening link {lienx} {e}')
                             quit()
                     remove_line(each_search)
-                    break
                 elif end1 in text :
                     print('the end1')
                     z = 0
+                    chrome_options = webdriver.ChromeOptions()
+                    chrome_options.add_experimental_option("useAutomationExtension", False)
+                    chrome_options.add_experimental_option("excludeSwitches",["enable-automation"])
+                    from webdriver_manager.chrome import ChromeDriverManager
+                    from selenium.webdriver.chrome.service import Service
+
+                    service_obj = Service(ChromeDriverManager().install())
+                    driver = webdriver.Chrome(options=chrome_options, service=service_obj)
                     for lienx in all_links :
                         try :
                             if check_url(lienx) == False :
+                                if all_links.index(lienx) % 10 == 0 and all_links.index(lienx) != 0:
+                                    chrome_options = webdriver.ChromeOptions()
+                                    chrome_options.add_experimental_option("useAutomationExtension", False)
+                                    chrome_options.add_experimental_option("excludeSwitches",["enable-automation"])
+                                    from webdriver_manager.chrome import ChromeDriverManager
+                                    from selenium.webdriver.chrome.service import Service
+
+                                    service_obj = Service(ChromeDriverManager().install())
+                                    driver = webdriver.Chrome(options=chrome_options, service=service_obj)
                                 data_extract(lienx)
                         except Exception as e:
                             print('Error 1')
@@ -686,26 +791,44 @@ def searching():
                                 file.write(f'error in opening link {lienx} {e}')
                             quit()
                     remove_line(each_search)
-                    break
                 
                 print(f'trying to fix that : {datetime.now() - end_time}')
                 
                 if datetime.now() > end_time  :
                     if len(all_links) == 0 :
                             z = 0
+                            break
                     if all_links[-1] == lastlinkfound:
                         print(f'Total links remained the same after 1 minute: {len(list(dict.fromkeys(all_links)))}')
                         print('the end2')
+                        
+                        chrome_options = webdriver.ChromeOptions()
+                        chrome_options.add_experimental_option("useAutomationExtension", False)
+                        chrome_options.add_experimental_option("excludeSwitches",["enable-automation"])
+                        from webdriver_manager.chrome import ChromeDriverManager
+                        from selenium.webdriver.chrome.service import Service
+
+                        service_obj = Service(ChromeDriverManager().install())
+                        driver = webdriver.Chrome(options=chrome_options, service=service_obj)
                         for lienx in all_links :
                             try :
                                 if check_url(lienx) == False :
-                                    data_extract(lienx)
+                                    if all_links.index(lienx) % 10 == 0 and all_links.index(lienx) != 0:
+                                        chrome_options = webdriver.ChromeOptions()
+                                        chrome_options.add_experimental_option("useAutomationExtension", False)
+                                        chrome_options.add_experimental_option("excludeSwitches",["enable-automation"])
+                                        from webdriver_manager.chrome import ChromeDriverManager
+                                        from selenium.webdriver.chrome.service import Service
+
+                                        service_obj = Service(ChromeDriverManager().install())
+                                        driver = webdriver.Chrome(options=chrome_options, service=service_obj)
+                                data_extract(lienx)
                             except Exception as e:
                                 print('Error 1')
-                                print(f'error in opening link {lienx} {e}')
-                                with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
-                                    file.write(f'error in opening link {lienx} {e}')
-                                quit()
+                            print(f'error in opening link {lienx} {e}')
+                            with open(f'{os.path.dirname(os.path.realpath(__file__))}/Errors.txt', 'w', encoding='utf-8') as file:
+                                file.write(f'error in opening link {lienx} {e}')
+                            quit()
                         z = 0
                         remove_line(each_search)
                     else:
@@ -715,6 +838,7 @@ def searching():
                             print('last link changed')
                         if len(all_links) == 0 :
                             z = 0
+                            break
                         # Get the current time
                         start_time = datetime.now()
 
@@ -724,9 +848,10 @@ def searching():
                         # Calculate the end time
                         end_time = start_time + duration
                 if z == 0 :
-                    remove_line(each_search)
                     break
-                
+
+            driver.quit()  
+            
 try :
     
     searching()
