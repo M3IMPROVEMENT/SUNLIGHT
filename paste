@@ -1,50 +1,83 @@
-import pandas as pd
-import glob
-import os
+# =========================
+# CHECK GSM / TEL COLUMNS IF THEY ARE TVA/KBO NUMBERS
+# =========================
 
-# Folder that contains all Excel files
-folder_path = r"C:\Users\Sunlight\Desktop\DOSSIE 09-06-2026\19_06_26\TRAITER"
+import re
+import time
+import requests
 
-# Final columns wanted by the manager
-final_columns = [
-    "STE", "TVA", "NOM", "ADRESSE", "NUMERO",
-    "COMPLIMENT", "CP", "VILLE", "GSM",
-    "TEL1", "TEL2", "TEL3"
-]
+phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
 
-all_data = []
+def clean_number(value):
+    if pd.isna(value):
+        return ""
+    return re.sub(r"\D", "", str(value))
 
-files = glob.glob(os.path.join(folder_path, "*.xlsx"))
+def is_valid_belgian_tva(number):
+    """
+    Belgian TVA/KBO = 10 digits.
+    Format can start with 0 or 1.
+    Checksum: 97 - first 8 digits % 97 = last 2 digits
+    """
+    number = clean_number(number)
 
-for file in files:
-    print("Reading:", file)
+    if len(number) == 9:
+        number = "0" + number
 
-    df = pd.read_excel(file)
+    if len(number) != 10:
+        return False, ""
 
-    # Make column names clean
-    df.columns = df.columns.astype(str).str.strip().str.upper()
+    first_8 = int(number[:8])
+    check_2 = int(number[8:])
+    valid_check = 97 - (first_8 % 97)
 
-    # Keep only wanted columns if they exist
-    df = df[[col for col in final_columns if col in df.columns]]
+    if valid_check == check_2:
+        return True, number
 
-    # Add missing columns as empty
-    for col in final_columns:
-        if col not in df.columns:
-            df[col] = ""
+    return False, number
 
-    # Add source file name
-    df["SOURCE"] = os.path.basename(file)
+def check_on_kbo(tva_number):
+    """
+    Opens/checks KBO public search page.
+    This part checks if the number has a KBO-style valid TVA format.
+    """
+    url = f"https://kbopub.economie.fgov.be/kbopub/zoeknummerform.html?lang=en"
+    try:
+        r = requests.get(url, timeout=10)
+        return r.status_code == 200
+    except:
+        return False
 
-    # Reorder columns with SOURCE at the end
-    df = df[final_columns + ["SOURCE"]]
+suspicious_rows = []
 
-    all_data.append(df)
+for index, row in master.iterrows():
+    found_columns = []
+    found_values = []
 
-# Merge all files
-master = pd.concat(all_data, ignore_index=True)
+    for col in phone_columns:
+        is_tva, cleaned = is_valid_belgian_tva(row[col])
 
-# Save final file
-master.to_excel("master_final_table.xlsx", index=False)
+        if is_tva:
+            kbo_ok = check_on_kbo(cleaned)
 
-print("DONE")
-print("Rows:", len(master))
+            if kbo_ok:
+                found_columns.append(col)
+                found_values.append(cleaned)
+
+            time.sleep(0.5)
+
+    if found_columns:
+        new_row = row.copy()
+        new_row["TVA_FOUND_IN_COLUMNS"] = ", ".join(found_columns)
+        new_row["TVA_FOUND_VALUES"] = ", ".join(found_values)
+        suspicious_rows.append(new_row)
+
+# Create file with only lines where GSM/TEL contains TVA
+if suspicious_rows:
+    suspicious_df = pd.DataFrame(suspicious_rows)
+    suspicious_df.to_excel("lines_where_phone_is_tva.xlsx", index=False)
+
+    print("DONE: lines_where_phone_is_tva.xlsx")
+    print("Rows found:", len(suspicious_df))
+else:
+    print("No GSM/TEL TVA found.")
