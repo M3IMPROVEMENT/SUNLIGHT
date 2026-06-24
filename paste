@@ -9,6 +9,25 @@ EXCEL_FILE = os.path.join(BASE_DIR, "Code Postal Scrapper.xlsx")
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
+GROUP_NAMES = {
+    "1000-1099": "région Bruxelles-Capitale",
+    "1100-1199": "région Bruxelles-Capitale",
+    "1200-1299": "région Bruxelles-Capitale",
+    "1300-1399": "région Wallonne",
+    "1400-1499": "région Wallonne",
+    "1500-1599": "région Flamande",
+    "1600-1699": "région Flamande",
+    "1700-1799": "région Flamande",
+    "1800-1899": "région Flamande",
+    "1900-1999": "région Flamande",
+    "2000-2999": "région Antwerpen",
+    "3000-3999": "région Vlaams-Brabant/Limburg",
+    "4000-4999": "région Liège",
+    "5000-5999": "région Namur",
+    "6000-6999": "région Luxembourg/Charleroi",
+    "7000-7999": "région Hainaut",
+}
+
 
 def write_file(filename, content):
     with open(os.path.join(BASE_DIR, filename), "w", encoding="utf-8") as f:
@@ -23,7 +42,31 @@ def load_postal_codes():
 
 POSTAL_CODES = load_postal_codes()
 cp_vars = {}
+group_vars = {}
 group_frames = {}
+
+
+def get_group_key(cp):
+    cp_int = int(cp)
+
+    if 1000 <= cp_int <= 1999:
+        start = (cp_int // 100) * 100
+        return f"{start}-{start + 99}"
+
+    if 2000 <= cp_int <= 2999:
+        return "2000-2999"
+    if 3000 <= cp_int <= 3999:
+        return "3000-3999"
+    if 4000 <= cp_int <= 4999:
+        return "4000-4999"
+    if 5000 <= cp_int <= 5999:
+        return "5000-5999"
+    if 6000 <= cp_int <= 6999:
+        return "6000-6999"
+    if 7000 <= cp_int <= 7999:
+        return "7000-7999"
+
+    return "Other"
 
 
 def run_manual():
@@ -56,14 +99,11 @@ def run_auto():
         status_label.configure(text="Please select at least one postal code", text_color="red")
         return
 
-    lines = []
-    for cp in selected_codes:
-        lines.append(f"{keyword} code postal {cp} Belgique")
-
+    lines = [f"{keyword} code postal {cp} Belgique" for cp in selected_codes]
     write_file("searchauto.txt", "\n".join(lines) + "\n")
 
     subprocess.Popen(["python3", "googleauto.py"], cwd=BASE_DIR)
-    status_label.configure(text=f"Automatic search started: {len(selected_codes)} postal codes", text_color="lightgreen")
+    status_label.configure(text=f"Started: {len(selected_codes)} searches", text_color="lightgreen")
 
 
 def show_manual():
@@ -81,12 +121,22 @@ def toggle_group(group_key):
     if frame.winfo_ismapped():
         frame.pack_forget()
     else:
-        frame.pack(fill="x", padx=25, pady=5)
+        frame.pack(fill="x", padx=35, pady=5)
 
 
-def select_group(group_codes, value):
-    for cp in group_codes:
-        cp_vars[cp].set(value)
+def select_group(group_key):
+    value = group_vars[group_key].get()
+    for cp, var in cp_vars.items():
+        if get_group_key(cp) == group_key:
+            var.set(value)
+
+
+def select_all():
+    value = all_regions_var.get()
+    for var in group_vars.values():
+        var.set(value)
+    for var in cp_vars.values():
+        var.set(value)
 
 
 app = ctk.CTk()
@@ -156,66 +206,74 @@ ctk.CTkButton(
 auto_frame = ctk.CTkFrame(app, fg_color="#008f86")
 
 ctk.CTkLabel(auto_frame, text="Enter keyword :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(10, 5))
-auto_keyword = ctk.CTkEntry(auto_frame, placeholder_text="hotel, coffee, restaurant...", height=55, font=("Arial", 15))
+auto_keyword = ctk.CTkEntry(auto_frame, placeholder_text="Enter keyword", height=55, font=("Arial", 15))
 auto_keyword.pack(fill="x", pady=5)
 
-ctk.CTkLabel(auto_frame, text="Select postal codes :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(20, 5))
+ctk.CTkLabel(auto_frame, text="Select region or city :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(20, 5))
 
-scroll = ctk.CTkScrollableFrame(auto_frame, height=430, fg_color="#007970")
+scroll = ctk.CTkScrollableFrame(auto_frame, height=430, fg_color="#eeeeee")
 scroll.pack(fill="both", expand=True, pady=10)
+
+all_regions_var = ctk.IntVar(value=0)
+all_cb = ctk.CTkCheckBox(
+    scroll,
+    text="All Regions",
+    variable=all_regions_var,
+    command=select_all,
+    text_color="black",
+    font=("Arial", 18, "bold")
+)
+all_cb.pack(anchor="w", padx=20, pady=10)
 
 groups = {}
 for cp in POSTAL_CODES:
-    group_start = (int(cp) // 100) * 100
-    group_end = group_start + 99
-    group_key = f"{group_start}-{group_end}"
-    groups.setdefault(group_key, []).append(cp)
+    group_key = get_group_key(cp)
+    if group_key != "Other":
+        groups.setdefault(group_key, []).append(cp)
 
 for group_key, codes in groups.items():
-    header = ctk.CTkFrame(scroll, fg_color="#006b64")
-    header.pack(fill="x", pady=4, padx=5)
+    row = ctk.CTkFrame(scroll, fg_color="#eeeeee")
+    row.pack(fill="x", pady=5, padx=10)
 
-    ctk.CTkButton(
-        header,
-        text=f"{group_key} ▼",
-        width=180,
-        fg_color="#40e000",
-        hover_color="#35bd00",
+    group_vars[group_key] = ctk.IntVar(value=0)
+
+    group_cb = ctk.CTkCheckBox(
+        row,
+        text=f"{group_key} {GROUP_NAMES.get(group_key, '')}",
+        variable=group_vars[group_key],
+        command=lambda g=group_key: select_group(g),
+        text_color="black",
+        font=("Arial", 17, "bold")
+    )
+    group_cb.pack(side="left", padx=10, pady=8)
+
+    arrow_btn = ctk.CTkButton(
+        row,
+        text="▼",
+        width=45,
+        height=35,
+        fg_color="#eeeeee",
+        hover_color="#dddddd",
+        text_color="black",
         command=lambda g=group_key: toggle_group(g)
-    ).pack(side="left", padx=5, pady=5)
+    )
+    arrow_btn.pack(side="right", padx=15)
 
-    ctk.CTkButton(
-        header,
-        text="Select",
-        width=80,
-        fg_color="#0080ff",
-        hover_color="#0066cc",
-        command=lambda c=codes: select_group(c, 1)
-    ).pack(side="left", padx=5)
-
-    ctk.CTkButton(
-        header,
-        text="Clear",
-        width=80,
-        fg_color="#aa3333",
-        hover_color="#882222",
-        command=lambda c=codes: select_group(c, 0)
-    ).pack(side="left", padx=5)
-
-    subframe = ctk.CTkFrame(scroll, fg_color="#008f86")
+    subframe = ctk.CTkFrame(scroll, fg_color="#eeeeee")
     group_frames[group_key] = subframe
 
     for cp in codes:
         var = ctk.IntVar(value=0)
         cp_vars[cp] = var
+
         cb = ctk.CTkCheckBox(
             subframe,
             text=cp,
             variable=var,
-            text_color="white",
-            font=("Arial", 14)
+            text_color="black",
+            font=("Arial", 15)
         )
-        cb.pack(anchor="w", padx=25, pady=2)
+        cb.pack(anchor="w", padx=45, pady=5)
 
 ctk.CTkButton(
     auto_frame,
