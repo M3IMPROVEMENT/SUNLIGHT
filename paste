@@ -1,13 +1,39 @@
-# Make CP a string and remove spaces
-master["CP"] = master["CP"].astype(str).str.strip()
+# ==========================================
+# CHECK CP IN THE FINAL FILE
+# ==========================================
 
-# Keep only digits for checking
-cp_clean = master["CP"].str.replace(r"\D", "", regex=True)
+df = pd.read_excel("master_final_table.xlsx")
 
-# Find CPs that are NOT exactly 4 digits
-cp_invalid = master[cp_clean.str.len() != 4]
+# Clean CP values
+cp_text = (
+    df["CP"]
+    .astype(str)
+    .str.strip()
+    .str.replace(r"\.0$", "", regex=True)
+)
 
-# Save invalid CPs to a separate file
-cp_invalid.to_excel("CP_invalid.xlsx", index=False)
+# Ignore empty values and NaN
+mask_not_empty = (
+    (cp_text != "")
+    & (cp_text.str.lower() != "nan")
+)
 
-print("Invalid CP rows:", len(cp_invalid))
+# Keep only digits
+cp_digits = cp_text.str.replace(r"\D", "", regex=True)
+
+# Find CP not equal to 4 digits
+invalid_cp = df[
+    mask_not_empty &
+    (cp_digits.str.len() != 4)
+].copy()
+
+# Replace CP with cleaned version
+invalid_cp["CP"] = cp_text[
+    mask_not_empty &
+    (cp_digits.str.len() != 4)
+]
+
+# Save result
+invalid_cp.to_excel("CP_invalid.xlsx", index=False)
+
+print("Invalid CP found:", len(invalid_cp))
