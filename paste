@@ -1,18 +1,59 @@
-#!/bin/bash
-cd "$(dirname "$0")"
-source venv/bin/activate
+import tkinter as tk
+from tkinter import messagebox
+import subprocess
+import os
 
-echo "Choose mode:"
-echo "1 - Manual search"
-echo "2 - Automatic search"
-read choice
+BASE_DIR = os.path.dirname(os.path.realpath(__file__))
 
-if [ "$choice" = "1" ]; then
-    python3 google.py
-elif [ "$choice" = "2" ]; then
-    python3 googleauto.py
-else
-    echo "Invalid choice"
-fi
+def run_manual():
+    search_text = manual_entry.get().strip()
 
-read -p "Press Enter to close..."
+    if not search_text:
+        messagebox.showerror("Error", "Please enter a search.")
+        return
+
+    with open(os.path.join(BASE_DIR, "search.txt"), "w", encoding="utf-8") as f:
+        f.write(search_text + "\n")
+
+    subprocess.Popen(["python3", "google.py"], cwd=BASE_DIR)
+    messagebox.showinfo("Started", "Manual scraping started.")
+
+def run_auto():
+    search_text = auto_text.get("1.0", tk.END).strip()
+
+    if not search_text:
+        messagebox.showerror("Error", "Please enter automatic searches.")
+        return
+
+    with open(os.path.join(BASE_DIR, "searchauto.txt"), "w", encoding="utf-8") as f:
+        f.write(search_text + "\n")
+
+    subprocess.Popen(["python3", "googleauto.py"], cwd=BASE_DIR)
+    messagebox.showinfo("Started", "Automatic scraping started.")
+
+root = tk.Tk()
+root.title("Google Scraping App")
+root.geometry("600x450")
+
+title = tk.Label(root, text="Google Scraping App", font=("Arial", 20, "bold"))
+title.pack(pady=15)
+
+manual_label = tk.Label(root, text="Manual Search")
+manual_label.pack()
+
+manual_entry = tk.Entry(root, width=60)
+manual_entry.pack(pady=5)
+
+manual_button = tk.Button(root, text="Start Manual Search", command=run_manual, width=30)
+manual_button.pack(pady=10)
+
+auto_label = tk.Label(root, text="Automatic Search - one search per line")
+auto_label.pack(pady=10)
+
+auto_text = tk.Text(root, width=60, height=10)
+auto_text.pack(pady=5)
+
+auto_button = tk.Button(root, text="Start Automatic Search", command=run_auto, width=30)
+auto_button.pack(pady=10)
+
+root.mainloop()
