@@ -1,8 +1,10 @@
 import customtkinter as ctk
 import subprocess
 import os
+import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
+EXCEL_FILE = os.path.join(BASE_DIR, "Code Postal Scrapper.xlsx")
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
@@ -11,6 +13,17 @@ ctk.set_default_color_theme("green")
 def write_file(filename, content):
     with open(os.path.join(BASE_DIR, filename), "w", encoding="utf-8") as f:
         f.write(content)
+
+
+def load_postal_codes():
+    df = pd.read_excel(EXCEL_FILE)
+    codes = df["Code Postal"].dropna().astype(int).astype(str).tolist()
+    return sorted(set(codes), key=lambda x: int(x))
+
+
+POSTAL_CODES = load_postal_codes()
+cp_vars = {}
+group_frames = {}
 
 
 def run_manual():
@@ -32,21 +45,25 @@ def run_manual():
 
 def run_auto():
     keyword = auto_keyword.get().strip()
-    searches = auto_text.get("1.0", "end").strip()
 
-    if not keyword and not searches:
-        status_label.configure(text="Please enter keyword/searches", text_color="red")
+    if not keyword:
+        status_label.configure(text="Please enter keyword", text_color="red")
         return
 
-    if searches:
-        final_text = searches
-    else:
-        final_text = keyword
+    selected_codes = [cp for cp, var in cp_vars.items() if var.get() == 1]
 
-    write_file("searchauto.txt", final_text + "\n")
+    if not selected_codes:
+        status_label.configure(text="Please select at least one postal code", text_color="red")
+        return
+
+    lines = []
+    for cp in selected_codes:
+        lines.append(f"{keyword} code postal {cp} Belgique")
+
+    write_file("searchauto.txt", "\n".join(lines) + "\n")
 
     subprocess.Popen(["python3", "googleauto.py"], cwd=BASE_DIR)
-    status_label.configure(text="Automatic search started", text_color="lightgreen")
+    status_label.configure(text=f"Automatic search started: {len(selected_codes)} postal codes", text_color="lightgreen")
 
 
 def show_manual():
@@ -59,23 +76,31 @@ def show_auto():
     auto_frame.pack(fill="both", expand=True, padx=40, pady=20)
 
 
+def toggle_group(group_key):
+    frame = group_frames[group_key]
+    if frame.winfo_ismapped():
+        frame.pack_forget()
+    else:
+        frame.pack(fill="x", padx=25, pady=5)
+
+
+def select_group(group_codes, value):
+    for cp in group_codes:
+        cp_vars[cp].set(value)
+
+
 app = ctk.CTk()
 app.title("Google Scrap")
-app.geometry("900x700")
+app.geometry("1000x850")
 app.configure(fg_color="#008f86")
 
-title = ctk.CTkLabel(
-    app,
-    text="Google Scrap",
-    font=("Arial", 34, "bold"),
-    text_color="white"
-)
-title.pack(pady=25)
+title = ctk.CTkLabel(app, text="Google Scrap", font=("Arial", 34, "bold"), text_color="white")
+title.pack(pady=20)
 
 menu_frame = ctk.CTkFrame(app, fg_color="#008f86")
 menu_frame.pack(pady=5)
 
-manual_btn = ctk.CTkButton(
+ctk.CTkButton(
     menu_frame,
     text="Manual Search",
     width=220,
@@ -85,10 +110,9 @@ manual_btn = ctk.CTkButton(
     text_color="white",
     font=("Arial", 16, "bold"),
     command=show_manual
-)
-manual_btn.grid(row=0, column=0, padx=15)
+).grid(row=0, column=0, padx=15)
 
-auto_btn = ctk.CTkButton(
+ctk.CTkButton(
     menu_frame,
     text="Automatic Search",
     width=220,
@@ -98,8 +122,7 @@ auto_btn = ctk.CTkButton(
     text_color="white",
     font=("Arial", 16, "bold"),
     command=show_auto
-)
-auto_btn.grid(row=0, column=1, padx=15)
+).grid(row=0, column=1, padx=15)
 
 manual_frame = ctk.CTkFrame(app, fg_color="#008f86")
 
@@ -112,7 +135,7 @@ manual_cp = ctk.CTkEntry(manual_frame, placeholder_text="Enter code postal", hei
 manual_cp.pack(fill="x", pady=5)
 
 ctk.CTkLabel(manual_frame, text="Country :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(15, 5))
-manual_country = ctk.CTkEntry(manual_frame, placeholder_text="Enter country", height=55, font=("Arial", 15))
+manual_country = ctk.CTkEntry(manual_frame, placeholder_text="Belgique", height=55, font=("Arial", 15))
 manual_country.pack(fill="x", pady=5)
 
 ctk.CTkLabel(manual_frame, text="City :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(15, 5))
@@ -133,42 +156,66 @@ ctk.CTkButton(
 auto_frame = ctk.CTkFrame(app, fg_color="#008f86")
 
 ctk.CTkLabel(auto_frame, text="Enter keyword :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(10, 5))
-auto_keyword = ctk.CTkEntry(auto_frame, placeholder_text="Enter keyword", height=55, font=("Arial", 15))
+auto_keyword = ctk.CTkEntry(auto_frame, placeholder_text="hotel, coffee, restaurant...", height=55, font=("Arial", 15))
 auto_keyword.pack(fill="x", pady=5)
 
+ctk.CTkLabel(auto_frame, text="Select postal codes :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(20, 5))
 
-def generate_belgium_cp():
-    auto_text.delete("1.0", "end")
+scroll = ctk.CTkScrollableFrame(auto_frame, height=430, fg_color="#007970")
+scroll.pack(fill="both", expand=True, pady=10)
 
-    keyword = auto_keyword.get().strip()
+groups = {}
+for cp in POSTAL_CODES:
+    group_start = (int(cp) // 100) * 100
+    group_end = group_start + 99
+    group_key = f"{group_start}-{group_end}"
+    groups.setdefault(group_key, []).append(cp)
 
-    if not keyword:
-        status_label.configure(text="Enter keyword first", text_color="red")
-        return
+for group_key, codes in groups.items():
+    header = ctk.CTkFrame(scroll, fg_color="#006b64")
+    header.pack(fill="x", pady=4, padx=5)
 
-    for cp in range(1000, 10000):
-        auto_text.insert(
-            "end",
-            f"{keyword} code postal {cp} Belgique\n"
+    ctk.CTkButton(
+        header,
+        text=f"{group_key} ▼",
+        width=180,
+        fg_color="#40e000",
+        hover_color="#35bd00",
+        command=lambda g=group_key: toggle_group(g)
+    ).pack(side="left", padx=5, pady=5)
+
+    ctk.CTkButton(
+        header,
+        text="Select",
+        width=80,
+        fg_color="#0080ff",
+        hover_color="#0066cc",
+        command=lambda c=codes: select_group(c, 1)
+    ).pack(side="left", padx=5)
+
+    ctk.CTkButton(
+        header,
+        text="Clear",
+        width=80,
+        fg_color="#aa3333",
+        hover_color="#882222",
+        command=lambda c=codes: select_group(c, 0)
+    ).pack(side="left", padx=5)
+
+    subframe = ctk.CTkFrame(scroll, fg_color="#008f86")
+    group_frames[group_key] = subframe
+
+    for cp in codes:
+        var = ctk.IntVar(value=0)
+        cp_vars[cp] = var
+        cb = ctk.CTkCheckBox(
+            subframe,
+            text=cp,
+            variable=var,
+            text_color="white",
+            font=("Arial", 14)
         )
-
-    status_label.configure(
-        text="Belgian postal codes generated",
-        text_color="lightgreen"
-    )
-
-ctk.CTkLabel(auto_frame, text="Automatic searches - one search per line :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(20, 5))
-auto_text = ctk.CTkTextbox(auto_frame, height=280, font=("Arial", 15))
-auto_text.pack(fill="x", pady=10)
-generate_btn = ctk.CTkButton(
-    auto_frame,
-    text="Generate Belgium Postal Codes",
-    command=generate_belgium_cp,
-    fg_color="#0080ff",
-    hover_color="#0066cc",
-    height=45
-)
-generate_btn.pack(pady=10)
+        cb.pack(anchor="w", padx=25, pady=2)
 
 ctk.CTkButton(
     auto_frame,
@@ -179,11 +226,10 @@ ctk.CTkButton(
     hover_color="#35bd00",
     font=("Arial", 18, "bold"),
     command=run_auto
-).pack(pady=25)
+).pack(pady=15)
 
 status_label = ctk.CTkLabel(app, text="", font=("Arial", 15, "bold"))
-status_label.pack(pady=10)
+status_label.pack(pady=5)
 
 show_manual()
-
 app.mainloop()
