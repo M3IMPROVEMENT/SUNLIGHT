@@ -1,83 +1,13 @@
-# =========================
-# CHECK GSM / TEL COLUMNS IF THEY ARE TVA/KBO NUMBERS
-# =========================
+# Make CP a string and remove spaces
+master["CP"] = master["CP"].astype(str).str.strip()
 
-import re
-import time
-import requests
+# Keep only digits for checking
+cp_clean = master["CP"].str.replace(r"\D", "", regex=True)
 
-phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
+# Find CPs that are NOT exactly 4 digits
+cp_invalid = master[cp_clean.str.len() != 4]
 
-def clean_number(value):
-    if pd.isna(value):
-        return ""
-    return re.sub(r"\D", "", str(value))
+# Save invalid CPs to a separate file
+cp_invalid.to_excel("CP_invalid.xlsx", index=False)
 
-def is_valid_belgian_tva(number):
-    """
-    Belgian TVA/KBO = 10 digits.
-    Format can start with 0 or 1.
-    Checksum: 97 - first 8 digits % 97 = last 2 digits
-    """
-    number = clean_number(number)
-
-    if len(number) == 9:
-        number = "0" + number
-
-    if len(number) != 10:
-        return False, ""
-
-    first_8 = int(number[:8])
-    check_2 = int(number[8:])
-    valid_check = 97 - (first_8 % 97)
-
-    if valid_check == check_2:
-        return True, number
-
-    return False, number
-
-def check_on_kbo(tva_number):
-    """
-    Opens/checks KBO public search page.
-    This part checks if the number has a KBO-style valid TVA format.
-    """
-    url = f"https://kbopub.economie.fgov.be/kbopub/zoeknummerform.html?lang=en"
-    try:
-        r = requests.get(url, timeout=10)
-        return r.status_code == 200
-    except:
-        return False
-
-suspicious_rows = []
-
-for index, row in master.iterrows():
-    found_columns = []
-    found_values = []
-
-    for col in phone_columns:
-        is_tva, cleaned = is_valid_belgian_tva(row[col])
-
-        if is_tva:
-            kbo_ok = check_on_kbo(cleaned)
-
-            if kbo_ok:
-                found_columns.append(col)
-                found_values.append(cleaned)
-
-            time.sleep(0.5)
-
-    if found_columns:
-        new_row = row.copy()
-        new_row["TVA_FOUND_IN_COLUMNS"] = ", ".join(found_columns)
-        new_row["TVA_FOUND_VALUES"] = ", ".join(found_values)
-        suspicious_rows.append(new_row)
-
-# Create file with only lines where GSM/TEL contains TVA
-if suspicious_rows:
-    suspicious_df = pd.DataFrame(suspicious_rows)
-    suspicious_df.to_excel("lines_where_phone_is_tva.xlsx", index=False)
-
-    print("DONE: lines_where_phone_is_tva.xlsx")
-    print("Rows found:", len(suspicious_df))
-else:
-    print("No GSM/TEL TVA found.")
+print("Invalid CP rows:", len(cp_invalid))
