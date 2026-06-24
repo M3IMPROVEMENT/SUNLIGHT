@@ -1,2 +1,45 @@
+
 for group_key in sorted(groups.keys(), key=lambda x: int(x.split("-")[0])):
     codes = groups[group_key]
+    row = ctk.CTkFrame(scroll, fg_color="#eeeeee")
+    row.pack(fill="x", pady=5, padx=10)
+
+    group_vars[group_key] = ctk.IntVar(value=0)
+
+    group_cb = ctk.CTkCheckBox(
+        row,
+        text=f"{group_key} {GROUP_NAMES.get(group_key, '')}",
+        variable=group_vars[group_key],
+        command=lambda g=group_key: select_group(g),
+        text_color="black",
+        font=("Arial", 17, "bold")
+    )
+    group_cb.pack(side="left", padx=10, pady=8)
+
+    arrow_btn = ctk.CTkButton(
+        row,
+        text="▼",
+        width=45,
+        height=35,
+        fg_color="#eeeeee",
+        hover_color="#dddddd",
+        text_color="black",
+        command=lambda g=group_key: toggle_group(g)
+    )
+    arrow_btn.pack(side="right", padx=15)
+
+    subframe = ctk.CTkFrame(scroll, fg_color="#eeeeee")
+    group_frames[group_key] = subframe
+
+    for cp in codes:
+        var = ctk.IntVar(value=0)
+        cp_vars[cp] = var
+
+        cb = ctk.CTkCheckBox(
+            subframe,
+            text=cp,
+            variable=var,
+            text_color="black",
+            font=("Arial", 15)
+        )
+        cb.pack(anchor="w", padx=45, pady=5)
