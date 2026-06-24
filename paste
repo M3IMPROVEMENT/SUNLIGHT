@@ -1,19 +1,9 @@
-def generate_belgium_cp():
-    auto_text.delete("1.0", "end")
-
-    keyword = auto_keyword.get().strip()
-
-    if not keyword:
-        status_label.configure(text="Enter keyword first", text_color="red")
-        return
-
-    for cp in range(1000, 10000):
-        auto_text.insert(
-            "end",
-            f"{keyword} code postal {cp} Belgique\n"
-        )
-
-    status_label.configure(
-        text="Belgian postal codes generated",
-        text_color="lightgreen"
-    )
+generate_btn = ctk.CTkButton(
+    auto_frame,
+    text="Generate Belgium Postal Codes",
+    command=generate_belgium_cp,
+    fg_color="#0080ff",
+    hover_color="#0066cc",
+    height=45
+)
+generate_btn.pack(pady=10)
