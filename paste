@@ -1,27 +1,18 @@
-Traceback (most recent call last):
-  File "/home/utilisateur/Bureau/install L_me/version_high_performance/googleauto.py", line 26, in <module>
-    driver = webdriver.Chrome(options=chrome_options,service=service_obj)
-  File "/home/utilisateur/Bureau/install L_me/version_high_performance/venv/lib/python3.14/site-packages/selenium/webdriver/chrome/webdriver.py", line 45, in __init__
-    super().__init__(
-    ~~~~~~~~~~~~~~~~^
-        browser_name=DesiredCapabilities.CHROME["browserName"],
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    ...<3 lines>...
-        keep_alive=keep_alive,
-        ^^^^^^^^^^^^^^^^^^^^^^
-    )
-    ^
-  File "/home/utilisateur/Bureau/install L_me/version_high_performance/venv/lib/python3.14/site-packages/selenium/webdriver/chromium/webdriver.py", line 50, in __init__
-    if finder.get_browser_path():
-       ~~~~~~~~~~~~~~~~~~~~~~~^^
-  File "/home/utilisateur/Bureau/install L_me/version_high_performance/venv/lib/python3.14/site-packages/selenium/webdriver/common/driver_finder.py", line 47, in get_browser_path
-    return self._binary_paths()["browser_path"]
-           ~~~~~~~~~~~~~~~~~~^^
-  File "/home/utilisateur/Bureau/install L_me/version_high_performance/venv/lib/python3.14/site-packages/selenium/webdriver/common/driver_finder.py", line 78, in _binary_paths
-    raise NoSuchDriverException(msg) from err
-selenium.common.exceptions.NoSuchDriverException: Message: Unable to obtain driver for chrome; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors/driver_location
+#!/bin/bash
+cd "$(dirname "$0")"
+source venv/bin/activate
 
-(venv) utilisateur@OptixDell320:~/Bureau/install L_me/version_high_performance$ ^C
-(venv) utilisateur@OptixDell320:~/Bureau/install L_me/version_high_performance$ ^C
-(venv) utilisateur@OptixDell320:~/Bureau/install L_me/version_high_performance$ 
+echo "Choose mode:"
+echo "1 - Manual search"
+echo "2 - Automatic search"
+read choice
 
+if [ "$choice" = "1" ]; then
+    python3 google.py
+elif [ "$choice" = "2" ]; then
+    python3 googleauto.py
+else
+    echo "Invalid choice"
+fi
+
+read -p "Press Enter to close..."
