@@ -1,59 +1,159 @@
-import tkinter as tk
-from tkinter import messagebox
+import customtkinter as ctk
 import subprocess
 import os
 
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
 
-def run_manual():
-    search_text = manual_entry.get().strip()
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("green")
 
-    if not search_text:
-        messagebox.showerror("Error", "Please enter a search.")
+
+def write_file(filename, content):
+    with open(os.path.join(BASE_DIR, filename), "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def run_manual():
+    keyword = manual_keyword.get().strip()
+    cp = manual_cp.get().strip()
+    country = manual_country.get().strip()
+    city = manual_city.get().strip()
+
+    if not keyword:
+        status_label.configure(text="Please enter keyword", text_color="red")
         return
 
-    with open(os.path.join(BASE_DIR, "search.txt"), "w", encoding="utf-8") as f:
-        f.write(search_text + "\n")
+    search = f"{keyword} {cp} {city} {country}".strip()
+    write_file("search.txt", search + "\n")
 
     subprocess.Popen(["python3", "google.py"], cwd=BASE_DIR)
-    messagebox.showinfo("Started", "Manual scraping started.")
+    status_label.configure(text=f"Manual search started: {search}", text_color="lightgreen")
+
 
 def run_auto():
-    search_text = auto_text.get("1.0", tk.END).strip()
+    keyword = auto_keyword.get().strip()
+    searches = auto_text.get("1.0", "end").strip()
 
-    if not search_text:
-        messagebox.showerror("Error", "Please enter automatic searches.")
+    if not keyword and not searches:
+        status_label.configure(text="Please enter keyword/searches", text_color="red")
         return
 
-    with open(os.path.join(BASE_DIR, "searchauto.txt"), "w", encoding="utf-8") as f:
-        f.write(search_text + "\n")
+    if searches:
+        final_text = searches
+    else:
+        final_text = keyword
+
+    write_file("searchauto.txt", final_text + "\n")
 
     subprocess.Popen(["python3", "googleauto.py"], cwd=BASE_DIR)
-    messagebox.showinfo("Started", "Automatic scraping started.")
+    status_label.configure(text="Automatic search started", text_color="lightgreen")
 
-root = tk.Tk()
-root.title("Google Scraping App")
-root.geometry("600x450")
 
-title = tk.Label(root, text="Google Scraping App", font=("Arial", 20, "bold"))
-title.pack(pady=15)
+def show_manual():
+    auto_frame.pack_forget()
+    manual_frame.pack(fill="both", expand=True, padx=40, pady=20)
 
-manual_label = tk.Label(root, text="Manual Search")
-manual_label.pack()
 
-manual_entry = tk.Entry(root, width=60)
-manual_entry.pack(pady=5)
+def show_auto():
+    manual_frame.pack_forget()
+    auto_frame.pack(fill="both", expand=True, padx=40, pady=20)
 
-manual_button = tk.Button(root, text="Start Manual Search", command=run_manual, width=30)
-manual_button.pack(pady=10)
 
-auto_label = tk.Label(root, text="Automatic Search - one search per line")
-auto_label.pack(pady=10)
+app = ctk.CTk()
+app.title("Google Scrap")
+app.geometry("900x700")
+app.configure(fg_color="#008f86")
 
-auto_text = tk.Text(root, width=60, height=10)
-auto_text.pack(pady=5)
+title = ctk.CTkLabel(
+    app,
+    text="Google Scrap",
+    font=("Arial", 34, "bold"),
+    text_color="white"
+)
+title.pack(pady=25)
 
-auto_button = tk.Button(root, text="Start Automatic Search", command=run_auto, width=30)
-auto_button.pack(pady=10)
+menu_frame = ctk.CTkFrame(app, fg_color="#008f86")
+menu_frame.pack(pady=5)
 
-root.mainloop()
+manual_btn = ctk.CTkButton(
+    menu_frame,
+    text="Manual Search",
+    width=220,
+    height=45,
+    fg_color="#40e000",
+    hover_color="#35bd00",
+    text_color="white",
+    font=("Arial", 16, "bold"),
+    command=show_manual
+)
+manual_btn.grid(row=0, column=0, padx=15)
+
+auto_btn = ctk.CTkButton(
+    menu_frame,
+    text="Automatic Search",
+    width=220,
+    height=45,
+    fg_color="#40e000",
+    hover_color="#35bd00",
+    text_color="white",
+    font=("Arial", 16, "bold"),
+    command=show_auto
+)
+auto_btn.grid(row=0, column=1, padx=15)
+
+manual_frame = ctk.CTkFrame(app, fg_color="#008f86")
+
+ctk.CTkLabel(manual_frame, text="Enter keyword :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(10, 5))
+manual_keyword = ctk.CTkEntry(manual_frame, placeholder_text="Enter keyword", height=55, font=("Arial", 15))
+manual_keyword.pack(fill="x", pady=5)
+
+ctk.CTkLabel(manual_frame, text="Code postal :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(15, 5))
+manual_cp = ctk.CTkEntry(manual_frame, placeholder_text="Enter code postal", height=55, font=("Arial", 15))
+manual_cp.pack(fill="x", pady=5)
+
+ctk.CTkLabel(manual_frame, text="Country :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(15, 5))
+manual_country = ctk.CTkEntry(manual_frame, placeholder_text="Enter country", height=55, font=("Arial", 15))
+manual_country.pack(fill="x", pady=5)
+
+ctk.CTkLabel(manual_frame, text="City :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(15, 5))
+manual_city = ctk.CTkEntry(manual_frame, placeholder_text="Enter city", height=55, font=("Arial", 15))
+manual_city.pack(fill="x", pady=5)
+
+ctk.CTkButton(
+    manual_frame,
+    text="Search",
+    height=55,
+    width=300,
+    fg_color="#40e000",
+    hover_color="#35bd00",
+    font=("Arial", 18, "bold"),
+    command=run_manual
+).pack(pady=30)
+
+auto_frame = ctk.CTkFrame(app, fg_color="#008f86")
+
+ctk.CTkLabel(auto_frame, text="Enter keyword :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(10, 5))
+auto_keyword = ctk.CTkEntry(auto_frame, placeholder_text="Enter keyword", height=55, font=("Arial", 15))
+auto_keyword.pack(fill="x", pady=5)
+
+ctk.CTkLabel(auto_frame, text="Automatic searches - one search per line :", font=("Arial", 17, "bold"), text_color="white").pack(anchor="w", pady=(20, 5))
+auto_text = ctk.CTkTextbox(auto_frame, height=280, font=("Arial", 15))
+auto_text.pack(fill="x", pady=10)
+
+ctk.CTkButton(
+    auto_frame,
+    text="Search",
+    height=55,
+    width=300,
+    fg_color="#40e000",
+    hover_color="#35bd00",
+    font=("Arial", 18, "bold"),
+    command=run_auto
+).pack(pady=25)
+
+status_label = ctk.CTkLabel(app, text="", font=("Arial", 15, "bold"))
+status_label.pack(pady=10)
+
+show_manual()
+
+app.mainloop()
