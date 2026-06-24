@@ -1,48 +1,15 @@
-for group_key in sorted(groups.keys(), key=lambda x: int(x.split("-")[0])):
-    codes = groups[group_key]
-
-    container = ctk.CTkFrame(scroll, fg_color="#eeeeee")
-    container.pack(fill="x", pady=5, padx=10)
-
-    row = ctk.CTkFrame(container, fg_color="#eeeeee")
-    row.pack(fill="x")
-
-    group_vars[group_key] = ctk.IntVar(value=0)
-
-    group_cb = ctk.CTkCheckBox(
-        row,
-        text=f"{group_key} {GROUP_NAMES.get(group_key, '')}",
-        variable=group_vars[group_key],
-        command=lambda g=group_key: select_group(g),
-        text_color="black",
-        font=("Arial", 17, "bold")
-    )
-    group_cb.pack(side="left", padx=10, pady=8)
-
-    arrow_btn = ctk.CTkButton(
-        row,
-        text="▼",
-        width=45,
-        height=35,
-        fg_color="#eeeeee",
-        hover_color="#dddddd",
-        text_color="black",
-        command=lambda g=group_key: toggle_group(g)
-    )
-    arrow_btn.pack(side="right", padx=15)
-
-    subframe = ctk.CTkFrame(container, fg_color="#eeeeee")
-    group_frames[group_key] = subframe
-
-    for cp in codes:
-        var = ctk.IntVar(value=0)
-        cp_vars[cp] = var
-
-        cb = ctk.CTkCheckBox(
-            subframe,
-            text=cp,
-            variable=var,
-            text_color="black",
-            font=("Arial", 15)
-        )
-        cb.pack(anchor="w", padx=45, pady=5)
+utilisateur@OptixDell320:~/Bureau/install L_me/version_high_performance$ ./googlescrap
+bash: ./googlescrap: Aucun fichier ou dossier de ce nom
+utilisateur@OptixDell320:~/Bureau/install L_me/version_high_performance$ ./googlescrap
+Traceback (most recent call last):
+  File "app.py", line 43, in <module>
+    POSTAL_CODES = load_postal_codes()
+  File "app.py", line 38, in load_postal_codes
+    df = pd.read_excel(EXCEL_FILE)
+  File "pandas/io/excel/_base.py", line 481, in read_excel
+  File "pandas/io/excel/_base.py", line 1604, in __init__
+  File "pandas/io/excel/_base.py", line 1452, in inspect_excel_format
+  File "pandas/io/common.py", line 939, in get_handle
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/_MEIJWXTDF/Code Postal Scrapper.xlsx'
+[PYI-38707:ERROR] Failed to execute script 'app' due to unhandled exception!
+utilisateur@OptixDell320:~/Bureau/install L_me/version_high_performance$ 
