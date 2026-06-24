@@ -1,8 +1,11 @@
-
 for group_key in sorted(groups.keys(), key=lambda x: int(x.split("-")[0])):
     codes = groups[group_key]
-    row = ctk.CTkFrame(scroll, fg_color="#eeeeee")
-    row.pack(fill="x", pady=5, padx=10)
+
+    container = ctk.CTkFrame(scroll, fg_color="#eeeeee")
+    container.pack(fill="x", pady=5, padx=10)
+
+    row = ctk.CTkFrame(container, fg_color="#eeeeee")
+    row.pack(fill="x")
 
     group_vars[group_key] = ctk.IntVar(value=0)
 
@@ -28,7 +31,7 @@ for group_key in sorted(groups.keys(), key=lambda x: int(x.split("-")[0])):
     )
     arrow_btn.pack(side="right", padx=15)
 
-    subframe = ctk.CTkFrame(scroll, fg_color="#eeeeee")
+    subframe = ctk.CTkFrame(container, fg_color="#eeeeee")
     group_frames[group_key] = subframe
 
     for cp in codes:
