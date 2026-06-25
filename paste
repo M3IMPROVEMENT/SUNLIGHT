@@ -1,1 +1,37 @@
-python -m PyInstaller --onefile --add-data "Code Postal Scrapper.xlsx:." --name googlescrap app.py
+import pandas as pd
+
+# Read the final master file
+df = pd.read_excel("master_final_table.xlsx", dtype={"CP": str})
+
+# Clean CP
+cp = (
+    df["CP"]
+    .astype(str)
+    .str.strip()
+    .str.replace(r"\.0$", "", regex=True)
+)
+
+# Ignore empty CP
+not_empty = (
+    (cp != "") &
+    (cp.str.lower() != "nan") &
+    (cp.str.lower() != "none")
+)
+
+# Keep only rows where CP is NOT exactly 4 digits
+wrong_cp = df[
+    not_empty &
+    ~cp.str.fullmatch(r"\d{4}")
+].copy()
+
+# Put cleaned CP in the result
+wrong_cp["CP"] = cp[
+    not_empty &
+    ~cp.str.fullmatch(r"\d{4}")
+]
+
+# Save wrong CP rows
+wrong_cp.to_excel("CP_wrong_length.xlsx", index=False)
+
+print("DONE")
+print("Wrong CP rows:", len(wrong_cp))
