@@ -2,10 +2,10 @@ import pandas as pd
 import glob
 import os
 
-# Folder that contains all Excel files
+# Folder containing the Excel files
 folder_path = r"C:\Users\Sunlight\Desktop\DOSSIE 09-06-2026_r\18_06_26\TRAITE"
 
-# Final columns wanted by the manager
+# Final columns required
 final_columns = [
     "STE", "TVA", "NOM", "ADRESSE", "NUMERO",
     "COMPLEMENT", "CP", "VILLE", "GSM",
@@ -14,28 +14,33 @@ final_columns = [
 
 all_data = []
 
+# Read all Excel files
 files = glob.glob(os.path.join(folder_path, "*.xlsx"))
 
 for file in files:
-    print("Reading:", file)
+    print("Reading:", os.path.basename(file))
 
     df = pd.read_excel(file)
 
-    # Make column names clean
+    # Clean column names
     df.columns = df.columns.astype(str).str.strip().str.upper()
 
-    # Keep only wanted columns if they exist
+    # Keep only existing required columns
     df = df[[col for col in final_columns if col in df.columns]]
 
-    # Add missing columns as empty
+    # Add missing columns
     for col in final_columns:
         if col not in df.columns:
             df[col] = ""
 
-    # Add source file name
+    # Remove completely empty rows
+    df = df.replace(r'^\s*$', pd.NA, regex=True)
+    df = df.dropna(subset=final_columns, how="all")
+
+    # Add source file
     df["SOURCE"] = os.path.basename(file)
 
-    # Reorder columns with SOURCE at the end
+    # Reorder columns
     df = df[final_columns + ["SOURCE"]]
 
     all_data.append(df)
@@ -43,8 +48,36 @@ for file in files:
 # Merge all files
 master = pd.concat(all_data, ignore_index=True)
 
-# Save final file
-master.to_excel("master_final_table.xlsx", index=False)
+# ==========================
+# CLEAN AND CHECK CP
+# ==========================
 
-print("DONE")
-print("Rows:", len(master))
+cp = (
+    master["CP"]
+    .fillna("")
+    .astype(str)
+    .str.strip()
+    .str.replace("\u00A0", "", regex=False)
+    .str.replace(r"\.0$", "", regex=True)
+)
+
+# Save cleaned CP back
+master["CP"] = cp
+
+# Valid CP = exactly 4 digits
+valid_mask = cp.str.fullmatch(r"\d{4}")
+
+# Split files
+master_clean = master[valid_mask].copy()
+wrong_cp = master[~valid_mask].copy()
+
+# ==========================
+# SAVE FILES
+# ==========================
+
+master_clean.to_excel("master_final_table.xlsx", index=False)
+wrong_cp.to_excel("CP_wrong_length.xlsx", index=False)
+
+print("\nDONE")
+print("Rows in master:", len(master_clean))
+print("Rows with wrong CP:", len(wrong_cp))
