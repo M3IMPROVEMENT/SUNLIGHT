@@ -1,25 +1,39 @@
+# ==========================================
+# SPLIT VALID AND INVALID CP
+# ==========================================
+
+# Clean CP values
 cp = (
-    df["CP"]
+    master["CP"]
     .fillna("")
     .astype(str)
     .str.strip()
-    .str.replace("\u00A0", "", regex=False)      # remove invisible space
-    .str.replace(r"\.0$", "", regex=True)        # 4000.0 -> 4000
+    .str.replace("\u00A0", "", regex=False)
+    .str.replace(r"\.0$", "", regex=True)
 )
 
-Replace this:
-
-not_empty = (
-    (cp != "") &
-    (cp.str.lower() != "nan") &
-    (cp.str.lower() != "none")
+# Valid rows:
+# - Empty CP is allowed
+# - OR exactly 4 digits
+valid_mask = (
+    (cp == "") |
+    (cp.str.lower() == "nan") |
+    (cp.str.lower() == "none") |
+    (cp.str.fullmatch(r"\d{4}"))
 )
 
-with this:
+# Create the two files
+master_clean = master[valid_mask].copy()
+wrong_cp = master[~valid_mask].copy()
 
-not_empty = (
-    (cp != "") &
-    (cp.str.lower() != "nan") &
-    (cp.str.lower() != "none") &
-    (cp.str.lower() != "nat")
-)
+# Save cleaned CP values
+master_clean["CP"] = cp[valid_mask]
+wrong_cp["CP"] = cp[~valid_mask]
+
+# Save both files
+master_clean.to_excel("master_final_table.xlsx", index=False)
+wrong_cp.to_excel("CP_wrong_length.xlsx", index=False)
+
+print("DONE")
+print("Rows in master:", len(master_clean))
+print("Wrong CP rows:", len(wrong_cp))
