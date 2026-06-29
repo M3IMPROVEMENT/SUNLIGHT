@@ -1,38 +1,78 @@
+import requests
+import time
+
 # ==========================
-# CHECK TVA IN WRONG COLUMNS
+# CHECK TVA USING KBO API
 # ==========================
+
+API_TOKEN = "PUT_YOUR_KBO_API_KEY_HERE"
+BASE_URL = "https://api.kbodata.app/v2"
 
 phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
 
-def clean_number(value):
+def clean_num(value):
     if pd.isna(value):
         return ""
-
-    value = str(value).strip()
+    value = str(value).strip().upper()
+    value = value.replace("BE", "")
     value = value.replace(".0", "")
-    value = value.replace(" ", "")
-    value = value.replace(".", "")
-    value = value.replace("-", "")
-    value = value.replace("/", "")
-    value = value.replace("+", "")
-    value = value.upper().replace("BE", "")
-
+    for ch in [" ", ".", "-", "/", "+", "(", ")"]:
+        value = value.replace(ch, "")
     return value
 
-# Detect TVA/KBO number wrongly placed in phone columns
+def is_kbo_number(value):
+    value = clean_num(value)
+    return len(value) == 10 and value.isdigit() and value[0] in ["0", "1"]
+
+def kbo_exists(tva):
+    tva = clean_num(tva)
+
+    if not is_kbo_number(tva):
+        return False
+
+    url = f"{BASE_URL}/enterprise/{tva}"
+    headers = {
+        "Authorization": f"Bearer {API_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+
+        if response.status_code == 200:
+            return True
+
+        if response.status_code == 404:
+            return False
+
+        print("KBO API error:", response.status_code, tva)
+        return False
+
+    except Exception as e:
+        print("Error checking:", tva, e)
+        return False
+
+# TVA wrongly placed in GSM/TEL columns AND exists in KBO
 wrong_tva_mask = pd.Series(False, index=master.index)
 
 for col in phone_columns:
-    cleaned_col = master[col].apply(clean_number)
+    print("Checking column:", col)
 
-    # Belgian TVA/KBO = 10 digits, starts with 0 or 1
-    wrong_tva_mask = wrong_tva_mask | cleaned_col.str.fullmatch(r"[01]\d{9}")
+    possible_tva = master[col].apply(clean_num)
+
+    for idx, value in possible_tva.items():
+        if is_kbo_number(value):
+            if kbo_exists(value):
+                wrong_tva_mask.loc[idx] = True
+            time.sleep(0.2)  # avoid too many fast requests
 
 # Separate wrong TVA rows
 wrong_tva_rows = master[wrong_tva_mask].copy()
 
-# Remove wrong TVA rows from master before CP checking
+# Remove them from master before CP checking
 master = master[~wrong_tva_mask].copy()
 
-# Save wrong TVA rows
-wrong_tva_rows.to_excel("TVA_wrong_column.xlsx", index=False)
+# Save wrong TVA file
+wrong_tva_rows.to_excel("TVA_wrong_column_KBO.xlsx", index=False)
+
+print("Wrong TVA rows:", len(wrong_tva_rows))
