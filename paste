@@ -1,7 +1,38 @@
-# Empty CP values are ignored (kept in the master)
-valid_mask = (
-    (cp == "") |
-    (cp.str.lower() == "nan") |
-    (cp.str.lower() == "none") |
-    (cp.str.fullmatch(r"\d{4}"))
-)
+# ==========================
+# CHECK TVA IN WRONG COLUMNS
+# ==========================
+
+phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
+
+def clean_number(value):
+    if pd.isna(value):
+        return ""
+
+    value = str(value).strip()
+    value = value.replace(".0", "")
+    value = value.replace(" ", "")
+    value = value.replace(".", "")
+    value = value.replace("-", "")
+    value = value.replace("/", "")
+    value = value.replace("+", "")
+    value = value.upper().replace("BE", "")
+
+    return value
+
+# Detect TVA/KBO number wrongly placed in phone columns
+wrong_tva_mask = pd.Series(False, index=master.index)
+
+for col in phone_columns:
+    cleaned_col = master[col].apply(clean_number)
+
+    # Belgian TVA/KBO = 10 digits, starts with 0 or 1
+    wrong_tva_mask = wrong_tva_mask | cleaned_col.str.fullmatch(r"[01]\d{9}")
+
+# Separate wrong TVA rows
+wrong_tva_rows = master[wrong_tva_mask].copy()
+
+# Remove wrong TVA rows from master before CP checking
+master = master[~wrong_tva_mask].copy()
+
+# Save wrong TVA rows
+wrong_tva_rows.to_excel("TVA_wrong_column.xlsx", index=False)
