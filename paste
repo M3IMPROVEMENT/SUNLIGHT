@@ -1,98 +1,89 @@
-import requests
-import time
+import pandas as pd
+import glob
+import os
+
+# Folder containing the Excel files
+folder_path = r"C:\Users\Sunlight\Desktop\DOSSIE 17-06-2026\30_6_26\TRAITER"
+
+# Final columns required
+final_columns = [
+    "STE", "TVA", "NOM", "ADRESSE", "NUMERO",
+    "COMPLEMENT", "CP", "VILLE", "GSM",
+    "TEL1", "TEL2", "TEL3"
+]
+
+all_data = []
+
+# Read all Excel files
+files = glob.glob(os.path.join(folder_path, "*.xlsx"))
+
+for file in files:
+    print("Reading:", os.path.basename(file))
+
+    df = pd.read_excel(file)
+
+    # Clean column names
+    df.columns = df.columns.astype(str).str.strip().str.upper()
+
+    # Keep only existing required columns
+    df = df[[col for col in final_columns if col in df.columns]]
+
+    # Add missing columns
+    for col in final_columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    # Remove completely empty rows
+    df = df.replace(r'^\s*$', pd.NA, regex=True)
+    df = df.dropna(subset=final_columns, how="all")
+
+    # Add source file
+    df["SOURCE"] = os.path.basename(file)
+
+    # Reorder columns
+    df = df[final_columns + ["SOURCE"]]
+
+    all_data.append(df)
+
+# Merge all files
+master = pd.concat(all_data, ignore_index=True)
 
 # ==========================
-# CHECK TVA USING KBO API
+# CLEAN AND CHECK CP
 # ==========================
 
-API_TOKEN = "PUT_YOUR_KBO_API_KEY_HERE"
-BASE_URL = "https://api.kbodata.app/v2"
+cp = (
+    master["CP"]
+    .fillna("")
+    .astype(str)
+    .str.strip()
+    .str.replace("\u00A0", "", regex=False)
+    .str.replace(r"\.0$", "", regex=True)
+)
 
-check_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
+# Save cleaned CP back
+master["CP"] = cp
 
-def clean_number(value):
-    if pd.isna(value):
-        return ""
+# Valid CP = exactly 4 digits
+# Empty CP values are ignored (kept in the master)
+valid_mask = (
+    (cp == "") |
+    (cp.str.lower() == "nan") |
+    (cp.str.lower() == "none") |
+    (cp.str.fullmatch(r"\d{4}"))
+)
 
-    value = str(value).strip().upper()
-    value = value.replace("BE", "")
-    value = value.replace(".0", "")
+# Split files
+master_clean = master[valid_mask].copy()
+wrong_cp = master[~valid_mask].copy()
 
-    for ch in [" ", ".", "-", "/", "+", "(", ")"]:
-        value = value.replace(ch, "")
+# ==========================l
+# SAVE FILES
+# ==========================
 
-    return value
+master_clean.to_excel("master_final_table.xlsx", index=False)
+wrong_cp.to_excel("CP_wrong_length.xlsx", index=False)
 
-
-def looks_like_tva(value):
-    value = clean_number(value)
-    return len(value) == 10 and value.isdigit() and value[0] in ["0", "1"]
-
-
-def kbo_exists(value):
-    value = clean_number(value)
-
-    if not looks_like_tva(value):
-        return False
-
-    url = f"{BASE_URL}/enterprise/{value}"
-    headers = {
-        "Authorization": f"Bearer {API_TOKEN}"
-    }
-
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-
-        if response.status_code == 200:
-            return True
-
-        if response.status_code == 404:
-            return False
-
-        print("API problem:", response.status_code, value)
-        return False
-
-    except Exception as e:
-        print("Error checking:", value, e)
-        return False
-
-
-wrong_tva_rows = []
-keep_rows = []
-
-for idx, row in master.iterrows():
-    tva_value = row["TVA"]
-
-    # 1. Check TVA column first
-    if kbo_exists(tva_value):
-        keep_rows.append(idx)
-        continue
-
-    # 2. If TVA is not valid, check GSM/TEL columns
-    found_tva_in_wrong_column = False
-
-    for col in check_columns:
-        value = row[col]
-
-        if kbo_exists(value):
-            found_tva_in_wrong_column = True
-            break
-
-    if found_tva_in_wrong_column:
-        wrong_tva_rows.append(idx)
-    else:
-        keep_rows.append(idx)
-
-    time.sleep(0.2)
-
-# Separate wrong rows
-tva_wrong = master.loc[wrong_tva_rows].copy()
-
-# Keep only clean rows
-master = master.loc[keep_rows].copy()
-
-# Save wrong TVA rows
-tva_wrong.to_excel("TVA_wrong_column_KBO.xlsx", index=False)
-
-print("TVA wrong rows:", len(tva_wrong))
-print("Rows remaining in master:", len(master))
+print("\nDONE")
+print("Rows in master:", len(master_clean))
+print("Rows with wrong CP:", len(wrong_cp))
