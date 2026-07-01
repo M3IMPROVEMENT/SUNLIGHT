@@ -61,11 +61,9 @@ cp = (
     .str.replace(r"\.0$", "", regex=True)
 )
 
-# Save cleaned CP back
 master["CP"] = cp
 
-# Valid CP = exactly 4 digits
-# Empty CP values are ignored (kept in the master)
+# Valid CP = empty OR exactly 4 digits
 valid_mask = (
     (cp == "") |
     (cp.str.lower() == "nan") |
@@ -73,17 +71,28 @@ valid_mask = (
     (cp.str.fullmatch(r"\d{4}"))
 )
 
-# Split files
 master_clean = master[valid_mask].copy()
 wrong_cp = master[~valid_mask].copy()
 
-# ==========================l
+# ==========================
 # SAVE FILES
 # ==========================
 
-master_clean.to_excel("master_final_table.xlsx", index=False)
-wrong_cp.to_excel("CP_wrong_length.xlsx", index=False)
+# Save master as CSV for Power BI
+master_clean.to_csv(
+    "master_final_table.csv",
+    index=False,
+    encoding="utf-8-sig"
+)
+
+# Save wrong CP
+if len(wrong_cp) <= 1048576:
+    wrong_cp.to_excel("CP_wrong_length.xlsx", index=False)
+else:
+    wrong_cp.to_csv("CP_wrong_length.csv", index=False, encoding="utf-8-sig")
 
 print("\nDONE")
 print("Rows in master:", len(master_clean))
 print("Rows with wrong CP:", len(wrong_cp))
+print("Master saved as: master_final_table.csv")
+print("Open the CSV with Power BI, not Excel.")
