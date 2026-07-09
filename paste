@@ -4,7 +4,6 @@ import re
 input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
 output_file = r"C:\Users\Sunlight\Desktop\separated_gsm_fixe.xlsx"
 
-# columns where numbers can exist
 phone_columns = ["GSM", "TEL1", "TEL 1", "TEL2", "TEL 2", "TEL3", "TEL 3", "NUMERO"]
 
 def clean_number(value):
@@ -12,39 +11,37 @@ def clean_number(value):
         return ""
 
     value = str(value).strip()
-
-    # remove .0 from Excel numbers
-    value = re.sub(r"\.0+$", "", value)
-
-    # keep only digits
-    value = re.sub(r"\D", "", value)
+    value = re.sub(r"\.0+$", "", value)   # remove Excel .0
+    value = re.sub(r"\D", "", value)      # keep only digits
 
     return value
 
 
-def classify_phone(number):
-    n = clean_number(number)
+def classify_phone(value):
+    n = clean_number(value)
 
     if n == "":
-        return ""
+        return "", ""
 
-    # remove international prefix 00
+    # remove Belgium prefixes
     if n.startswith("0032"):
-        return "GSM"
+        n = n[4:]
+    elif n.startswith("32"):
+        n = n[2:]
+    elif n.startswith("0"):
+        n = n[1:]
 
-    # Belgium country code
-    if n.startswith("32"):
-        return "GSM"
+    # after removing 0032 / 32 / 0:
+    # GSM = 9 digits
+    # FIXE = 8 digits
+    if len(n) == 9:
+        return "GSM", n
 
-    # GSM: 9 digits or more
-    if len(n) >= 9:
-        return "GSM"
+    elif len(n) == 8:
+        return "FIXE", n
 
-    # FIXE: exactly 8 digits, no 0, no 32
-    if len(n) == 8 and not n.startswith("0") and not n.startswith("32"):
-        return "FIXE"
-
-    return "UNKNOWN"
+    else:
+        return "UNKNOWN", n
 
 
 all_results = []
@@ -53,6 +50,8 @@ all_results = []
 sheets = pd.read_excel(input_file, sheet_name=None)
 
 for sheet_name, df in sheets.items():
+    print("Reading sheet:", sheet_name)
+
     df.columns = df.columns.astype(str).str.strip().str.upper()
 
     df["SOURCE_SHEET"] = sheet_name
@@ -62,19 +61,19 @@ for sheet_name, df in sheets.items():
 
     for col in phone_columns:
         col = col.upper()
+
         if col in df.columns:
             for index, value in df[col].items():
-                number = clean_number(value)
-                phone_type = classify_phone(number)
+                phone_type, cleaned_number = classify_phone(value)
 
                 if phone_type == "GSM":
-                    df.at[index, "GSM_SEPARATED"] = number
+                    df.at[index, "GSM_SEPARATED"] = cleaned_number
 
                 elif phone_type == "FIXE":
-                    df.at[index, "FIXE_SEPARATED"] = number
+                    df.at[index, "FIXE_SEPARATED"] = cleaned_number
 
                 elif phone_type == "UNKNOWN":
-                    df.at[index, "UNKNOWN_PHONE"] = number
+                    df.at[index, "UNKNOWN_PHONE"] = cleaned_number
 
     all_results.append(df)
 
