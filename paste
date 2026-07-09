@@ -2,28 +2,27 @@ import pandas as pd
 import re
 
 input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
-output_file = r"C:\Users\Sunlight\Desktop\separated_gsm_fixe.xlsx"
+output_file = r"C:\Users\Sunlight\Desktop\corrected_gsm_tel.xlsx"
 
-phone_columns = ["GSM", "TEL1", "TEL 1", "TEL2", "TEL 2", "TEL3", "TEL 3", "NUMERO"]
+phone_columns = ["GSM", "TEL1", "TEL 1", "TEL2", "TEL 2", "TEL3", "TEL 3"]
 
-def clean_number(value):
+def clean_for_check(value):
     if pd.isna(value):
         return ""
 
     value = str(value).strip()
-    value = re.sub(r"\.0+$", "", value)   # remove Excel .0
-    value = re.sub(r"\D", "", value)      # keep only digits
+    value = re.sub(r"\.0+$", "", value)
+    value = re.sub(r"\D", "", value)
 
     return value
 
 
 def classify_phone(value):
-    n = clean_number(value)
+    n = clean_for_check(value)
 
     if n == "":
-        return "", ""
+        return ""
 
-    # remove Belgium prefixes
     if n.startswith("0032"):
         n = n[4:]
     elif n.startswith("32"):
@@ -31,55 +30,56 @@ def classify_phone(value):
     elif n.startswith("0"):
         n = n[1:]
 
-    # after removing 0032 / 32 / 0:
-    # GSM = 9 digits
-    # FIXE = 8 digits
     if len(n) == 9:
-        return "GSM", n
-
+        return "GSM"
     elif len(n) == 8:
-        return "FIXE", n
-
+        return "FIXE"
     else:
-        return "UNKNOWN", n
+        return "UNKNOWN"
 
 
-all_results = []
-
-# read all sheets
-sheets = pd.read_excel(input_file, sheet_name=None)
-
-for sheet_name, df in sheets.items():
-    print("Reading sheet:", sheet_name)
-
-    df.columns = df.columns.astype(str).str.strip().str.upper()
-
-    df["SOURCE_SHEET"] = sheet_name
-    df["GSM_SEPARATED"] = ""
-    df["FIXE_SEPARATED"] = ""
-    df["UNKNOWN_PHONE"] = ""
+def fix_row(row):
+    gsm_numbers = []
+    fixe_numbers = []
+    unknown_numbers = []
 
     for col in phone_columns:
-        col = col.upper()
+        if col in row.index:
+            value = row[col]
 
-        if col in df.columns:
-            for index, value in df[col].items():
-                phone_type, cleaned_number = classify_phone(value)
+            if pd.notna(value) and str(value).strip() != "":
+                phone_type = classify_phone(value)
 
                 if phone_type == "GSM":
-                    df.at[index, "GSM_SEPARATED"] = cleaned_number
-
+                    gsm_numbers.append(value)
                 elif phone_type == "FIXE":
-                    df.at[index, "FIXE_SEPARATED"] = cleaned_number
+                    fixe_numbers.append(value)
+                else:
+                    unknown_numbers.append(value)
 
-                elif phone_type == "UNKNOWN":
-                    df.at[index, "UNKNOWN_PHONE"] = cleaned_number
+    row["GSM"] = gsm_numbers[0] if len(gsm_numbers) > 0 else ""
 
-    all_results.append(df)
+    row["TEL1"] = fixe_numbers[0] if len(fixe_numbers) > 0 else ""
+    row["TEL2"] = fixe_numbers[1] if len(fixe_numbers) > 1 else ""
+    row["TEL3"] = fixe_numbers[2] if len(fixe_numbers) > 2 else ""
 
-final_df = pd.concat(all_results, ignore_index=True)
+    row["UNKNOWN_PHONE"] = " | ".join(map(str, unknown_numbers))
 
-final_df.to_excel(output_file, index=False)
+    return row
+
+
+sheets = pd.read_excel(input_file, sheet_name=None)
+
+with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+    for sheet_name, df in sheets.items():
+        print("Reading sheet:", sheet_name)
+
+        df.columns = df.columns.astype(str).str.strip().str.upper()
+
+        df = df.apply(fix_row, axis=1)
+
+        df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
 
 print("DONE")
-print("File saved here:", output_file)
+print("Original file was NOT changed")
+print("New file saved here:", output_file)
