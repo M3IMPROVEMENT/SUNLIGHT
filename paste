@@ -1,9 +1,86 @@
-Bonjour monsieur ACHRAF ,
+import pandas as pd
+import re
 
-Je souhaiterais solliciter une journée de congé le 10 juillet, car je dois m'occuper de démarches personnelles importantes qui nécessitent ma présence.
+input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
+output_file = r"C:\Users\Sunlight\Desktop\separated_gsm_fixe.xlsx"
 
-Je vous remercie par avance pour votre compréhension et reste à votre disposition pour toute organisation nécessaire afin d'assurer la continuité de mon travail.
+# columns where numbers can exist
+phone_columns = ["GSM", "TEL1", "TEL 1", "TEL2", "TEL 2", "TEL3", "TEL 3", "NUMERO"]
 
-Cordialement,
+def clean_number(value):
+    if pd.isna(value):
+        return ""
 
-Meriame Gaddari
+    value = str(value).strip()
+
+    # remove .0 from Excel numbers
+    value = re.sub(r"\.0+$", "", value)
+
+    # keep only digits
+    value = re.sub(r"\D", "", value)
+
+    return value
+
+
+def classify_phone(number):
+    n = clean_number(number)
+
+    if n == "":
+        return ""
+
+    # remove international prefix 00
+    if n.startswith("0032"):
+        return "GSM"
+
+    # Belgium country code
+    if n.startswith("32"):
+        return "GSM"
+
+    # GSM: 9 digits or more
+    if len(n) >= 9:
+        return "GSM"
+
+    # FIXE: exactly 8 digits, no 0, no 32
+    if len(n) == 8 and not n.startswith("0") and not n.startswith("32"):
+        return "FIXE"
+
+    return "UNKNOWN"
+
+
+all_results = []
+
+# read all sheets
+sheets = pd.read_excel(input_file, sheet_name=None)
+
+for sheet_name, df in sheets.items():
+    df.columns = df.columns.astype(str).str.strip().str.upper()
+
+    df["SOURCE_SHEET"] = sheet_name
+    df["GSM_SEPARATED"] = ""
+    df["FIXE_SEPARATED"] = ""
+    df["UNKNOWN_PHONE"] = ""
+
+    for col in phone_columns:
+        col = col.upper()
+        if col in df.columns:
+            for index, value in df[col].items():
+                number = clean_number(value)
+                phone_type = classify_phone(number)
+
+                if phone_type == "GSM":
+                    df.at[index, "GSM_SEPARATED"] = number
+
+                elif phone_type == "FIXE":
+                    df.at[index, "FIXE_SEPARATED"] = number
+
+                elif phone_type == "UNKNOWN":
+                    df.at[index, "UNKNOWN_PHONE"] = number
+
+    all_results.append(df)
+
+final_df = pd.concat(all_results, ignore_index=True)
+
+final_df.to_excel(output_file, index=False)
+
+print("DONE")
+print("File saved here:", output_file)
