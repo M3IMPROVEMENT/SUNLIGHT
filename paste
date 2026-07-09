@@ -1,85 +1,49 @@
-import pandas as pd
-import re
+ermissionError                           Traceback (most recent call last)
+Cell In[4], line 73
+     69 
+     70 
+     71 sheets = pd.read_excel(input_file, sheet_name=None)
+     72 
+---> 73 with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+     74     for sheet_name, df in sheets.items():
+     75         print("Reading sheet:", sheet_name)
+     76 
 
-input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
-output_file = r"C:\Users\Sunlight\Desktop\corrected_gsm_tel.xlsx"
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\io\excel\_openpyxl.py:62, in OpenpyxlWriter.__init__(self, path, engine, date_format, datetime_format, mode, storage_options, if_sheet_exists, engine_kwargs, **kwargs)
+     58 from openpyxl.workbook import Workbook
+     60 engine_kwargs = combine_kwargs(engine_kwargs, kwargs)
+---> 62 super().__init__(
+     63     path,
+     64     mode=mode,
+     65     storage_options=storage_options,
+     66     if_sheet_exists=if_sheet_exists,
+     67     engine_kwargs=engine_kwargs,
+     68 )
+     70 # ExcelWriter replaced "a" by "r+" to allow us to first read the excel file from
+     71 # the file and later write to it
+     72 if "r+" in self._mode:  # Load from existing workbook
 
-phone_columns = ["GSM", "TEL1", "TEL 1", "TEL2", "TEL 2", "TEL3", "TEL 3"]
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\io\excel\_base.py:1281, in ExcelWriter.__init__(self, path, engine, date_format, datetime_format, mode, storage_options, if_sheet_exists, engine_kwargs)
+   1277 self._handles = IOHandles(
+   1278     cast(IO[bytes], path), compression={"compression": None}
+   1279 )
+   1280 if not isinstance(path, ExcelWriter):
+-> 1281     self._handles = get_handle(
+   1282         path, mode, storage_options=storage_options, is_text=False
+   1283     )
+   1284 self._cur_sheet = None
+   1286 if date_format is None:
 
-def clean_for_check(value):
-    if pd.isna(value):
-        return ""
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\io\common.py:939, in get_handle(path_or_buf, mode, encoding, compression, memory_map, is_text, errors, storage_options)
+    930         handle = open(
+    931             handle,
+    932             ioargs.mode,
+   (...)    935             newline="",
+    936         )
+    937     else:
+    938         # Binary mode
+--> 939         handle = open(handle, ioargs.mode)
+    940     handles.append(handle)
+    942 # Convert BytesIO or file objects passed with an encoding
 
-    value = str(value).strip()
-    value = re.sub(r"\.0+$", "", value)
-    value = re.sub(r"\D", "", value)
-
-    return value
-
-
-def classify_phone(value):
-    n = clean_for_check(value)
-
-    if n == "":
-        return ""
-
-    if n.startswith("0032"):
-        n = n[4:]
-    elif n.startswith("32"):
-        n = n[2:]
-    elif n.startswith("0"):
-        n = n[1:]
-
-    if len(n) == 9:
-        return "GSM"
-    elif len(n) == 8:
-        return "FIXE"
-    else:
-        return "UNKNOWN"
-
-
-def fix_row(row):
-    gsm_numbers = []
-    fixe_numbers = []
-    unknown_numbers = []
-
-    for col in phone_columns:
-        if col in row.index:
-            value = row[col]
-
-            if pd.notna(value) and str(value).strip() != "":
-                phone_type = classify_phone(value)
-
-                if phone_type == "GSM":
-                    gsm_numbers.append(value)
-                elif phone_type == "FIXE":
-                    fixe_numbers.append(value)
-                else:
-                    unknown_numbers.append(value)
-
-    row["GSM"] = gsm_numbers[0] if len(gsm_numbers) > 0 else ""
-
-    row["TEL1"] = fixe_numbers[0] if len(fixe_numbers) > 0 else ""
-    row["TEL2"] = fixe_numbers[1] if len(fixe_numbers) > 1 else ""
-    row["TEL3"] = fixe_numbers[2] if len(fixe_numbers) > 2 else ""
-
-    row["UNKNOWN_PHONE"] = " | ".join(map(str, unknown_numbers))
-
-    return row
-
-
-sheets = pd.read_excel(input_file, sheet_name=None)
-
-with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
-    for sheet_name, df in sheets.items():
-        print("Reading sheet:", sheet_name)
-
-        df.columns = df.columns.astype(str).str.strip().str.upper()
-
-        df = df.apply(fix_row, axis=1)
-
-        df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
-
-print("DONE")
-print("Original file was NOT changed")
-print("New file saved here:", output_file)
+PermissionError: [Errno 13] Permission denied: 'C:\\Users\\Sunlight\\Desktop\\DOSSIE 17-06-2026\\GSM'
