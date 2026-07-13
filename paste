@@ -1,16 +1,20 @@
 import pandas as pd
 import os
-import glob
 import re
 
-# Folder containing your original Excel files
-input_folder = r"C:\Users\Sunlight\Desktop\DOSSIE 17-06-2026\1-2-3.xlsl"
+# Your original Excel file
+input_file = r"C:\Users\Sunlight\Desktop\DOSSIE 17-06-2026\1-2-3.xlsx"
 
-# New folder where corrected copies will be saved
-output_folder = r"C:\Users\Sunlight\Desktop\DOSSIE 17-06-2026\GSM\\GSM_FIXE"
+# Folder where the new Excel file will be saved
+output_folder = r"C:\Users\Sunlight\Desktop\DOSSIE 17-06-2026\GSM\GSM_FIXE"
 
 # Create the output folder if it does not exist
 os.makedirs(output_folder, exist_ok=True)
+
+# New output file name
+input_filename = os.path.basename(input_file)
+output_name = os.path.splitext(input_filename)[0] + "_GSM_FIXE.xlsx"
+output_file = os.path.join(output_folder, output_name)
 
 # Columns that will be checked
 phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
@@ -19,7 +23,7 @@ phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
 def clean_for_check(value):
     """
     Clean the number only for classification.
-    The original number will remain unchanged in the output.
+    The original columns will not be modified.
     """
     if pd.isna(value):
         return ""
@@ -29,7 +33,7 @@ def clean_for_check(value):
     # Remove .0 or .000000 added by Excel
     number = re.sub(r"\.0+$", "", number)
 
-    # Keep digits only
+    # Keep digits only for checking
     number = re.sub(r"\D", "", number)
 
     return number
@@ -37,21 +41,21 @@ def clean_for_check(value):
 
 def classify_phone(value):
     """
-    Classification after temporarily removing:
-    - 0032
-    - 32
-    - one leading 0
+    Remove the Belgian prefix only for checking:
+
+    0032xxxxxxxx
+    32xxxxxxxx
+    0xxxxxxxx
 
     After removing the prefix:
-    - 9 digits = GSM
-    - 8 digits = FIXE
+    9 digits = GSM
+    8 digits = FIXE
     """
     number = clean_for_check(value)
 
     if number == "":
         return ""
 
-    # Remove Belgian prefixes only for checking
     if number.startswith("0032"):
         number = number[4:]
 
@@ -72,8 +76,8 @@ def classify_phone(value):
 
 def original_number_as_text(value):
     """
-    Return the original number as text.
-    Only removes Excel's .0 ending.
+    Keep the original number.
+    Only remove Excel's .0 ending.
     """
     if pd.isna(value):
         return ""
@@ -117,74 +121,56 @@ def add_correct_phone_columns(df):
                 if original_number not in fixe_numbers:
                     fixe_numbers.append(original_number)
 
+        # Several numbers are placed in the same cell using ;
         correct_gsm_values.append(" ; ".join(gsm_numbers))
         fixe_values.append(" ; ".join(fixe_numbers))
 
-    # Add the two new columns at the end
+    # Add new columns without changing GSM, TEL1, TEL2 or TEL3
     df["CORRECT_GSM"] = correct_gsm_values
     df["FIXE"] = fixe_values
 
     return df
 
 
-# Find all Excel files
-excel_files = (
-    glob.glob(os.path.join(input_folder, "*.xlsx"))
-    + glob.glob(os.path.join(input_folder, "*.xls"))
-)
+try:
+    # Read every sheet from the Excel file
+    sheets = pd.read_excel(
+        input_file,
+        sheet_name=None,
+        dtype=object
+    )
 
-if not excel_files:
-    print("No Excel files were found in the input folder.")
+    with pd.ExcelWriter(
+        output_file,
+        engine="openpyxl"
+    ) as writer:
 
-else:
-    for input_file in excel_files:
+        for sheet_name, df in sheets.items():
 
-        filename = os.path.basename(input_file)
+            print("Processing sheet:", sheet_name)
 
-        # Ignore temporary Excel files
-        if filename.startswith("~$"):
-            continue
+            corrected_df = add_correct_phone_columns(df.copy())
 
-        # Always save as .xlsx
-        output_name = os.path.splitext(filename)[0] + "_GSM_FIXE.xlsx"
-        output_file = os.path.join(output_folder, output_name)
-
-        print("Processing:", filename)
-
-        try:
-            # Read all sheets
-            sheets = pd.read_excel(
-                input_file,
-                sheet_name=None,
-                dtype=object
+            corrected_df.to_excel(
+                writer,
+                sheet_name=str(sheet_name)[:31],
+                index=False
             )
 
-            with pd.ExcelWriter(
-                output_file,
-                engine="openpyxl"
-            ) as writer:
-
-                for sheet_name, df in sheets.items():
-
-                    corrected_df = add_correct_phone_columns(df.copy())
-
-                    corrected_df.to_excel(
-                        writer,
-                        sheet_name=str(sheet_name)[:31],
-                        index=False
-                    )
-
-            print("Saved:", output_file)
-
-        except PermissionError:
-            print("Permission error:", filename)
-            print("Close the Excel file and run the code again.")
-
-        except Exception as error:
-            print("Error in file:", filename)
-            print(error)
-
     print("\nDONE")
-    print("Original files were not modified.")
-    print("New files are saved in:")
-    print(output_folder)
+    print("The original Excel file was not modified.")
+    print("The new file was saved here:")
+    print(output_file)
+
+except FileNotFoundError:
+    print("The input file was not found.")
+    print("Check this path:")
+    print(input_file)
+
+except PermissionError:
+    print("Permission error.")
+    print("Close the original file and the output file in Excel, then run the code again.")
+
+except Exception as error:
+    print("An error occurred:")
+    print(error)
