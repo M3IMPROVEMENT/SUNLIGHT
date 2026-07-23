@@ -1,176 +1,49 @@
-import pandas as pd
-import os
-import re
+---------------------------------------------------------------------------
+InvalidIndexError                         Traceback (most recent call last)
+Cell In[2], line 49
+     45 
+     46     all_data.append(df)
+     47 
+     48 # Merge all files
+---> 49 master = pd.concat(all_data, ignore_index=True)
+     50 
+     51 # ==========================
+     52 # CLEAN AND CHECK CP
 
-# Your original Excel file
-input_file = r"C:\Users\Sunlight\Desktop\DOSSIE 17-06-2026\1-2-3.xlsx"
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\reshape\concat.py:466, in concat(objs, axis, join, ignore_index, keys, levels, names, verify_integrity, sort, copy)
+    464 axis = 1 - bm_axis if is_frame else 0
+    465 names = names or getattr(keys, "names", None)
+--> 466 result = _get_result(
+    467     objs,
+    468     is_series,
+    469     bm_axis,
+    470     ignore_index,
+    471     intersect,
+    472     sort,
+    473     keys,
+    474     levels,
+    475     verify_integrity,
+    476     names,
+    477     axis,
+    478 )
+    480 if sort is lib.no_default:
+    481     if orig_axis == 0:
 
-# Folder where the new Excel file will be saved
-output_folder = r"C:\Users\Sunlight\Desktop\DOSSIE 17-06-2026\GSM\GSM_FIXE"
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\reshape\concat.py:653, in _get_result(objs, is_series, bm_axis, ignore_index, intersect, sort, keys, levels, verify_integrity, names, axis)
+    651         obj_labels = obj.axes[1 - ax]
+    652         if not new_labels.equals(obj_labels):
+--> 653             indexers[ax] = obj_labels.get_indexer(new_labels)
+    655     mgrs_indexers.append((obj._mgr, indexers))
+    657 new_data = concatenate_managers(
+    658     mgrs_indexers, result_axes, concat_axis=bm_axis, copy=False
+    659 )
 
-# Create the output folder if it does not exist
-os.makedirs(output_folder, exist_ok=True)
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\indexes\base.py:3728, in Index.get_indexer(self, target, method, limit, tolerance)
+   3725 self._check_indexing_method(method, limit, tolerance)
+   3727 if not self._index_as_unique:
+-> 3728     raise InvalidIndexError(self._requires_unique_msg)
+   3730 if len(target) == 0:
+   3731     return np.array([], dtype=np.intp)
 
-# New output file name
-input_filename = os.path.basename(input_file)
-output_name = os.path.splitext(input_filename)[0] + "_GSM_FIXE.xlsx"
-output_file = os.path.join(output_folder, output_name)
+InvalidIndexError: Reindexing only valid with uniquely valued Index objects
 
-# Columns that will be checked
-phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
-
-
-def clean_for_check(value):
-    """
-    Clean the number only for classification.
-    The original columns will not be modified.
-    """
-    if pd.isna(value):
-        return ""
-
-    number = str(value).strip()
-
-    # Remove .0 or .000000 added by Excel
-    number = re.sub(r"\.0+$", "", number)
-
-    # Keep digits only for checking
-    number = re.sub(r"\D", "", number)
-
-    return number
-
-
-def classify_phone(value):
-    """
-    Remove the Belgian prefix only for checking:
-
-    0032xxxxxxxx
-    32xxxxxxxx
-    0xxxxxxxx
-
-    After removing the prefix:
-    9 digits = GSM
-    8 digits = FIXE
-    """
-    number = clean_for_check(value)
-
-    if number == "":
-        return ""
-
-    if number.startswith("0032"):
-        number = number[4:]
-
-    elif number.startswith("32"):
-        number = number[2:]
-
-    elif number.startswith("0"):
-        number = number[1:]
-
-    if len(number) == 9:
-        return "GSM"
-
-    if len(number) == 8:
-        return "FIXE"
-
-    return "UNKNOWN"
-
-
-def original_number_as_text(value):
-    """
-    Keep the original number.
-    Only remove Excel's .0 ending.
-    """
-    if pd.isna(value):
-        return ""
-
-    number = str(value).strip()
-    number = re.sub(r"\.0+$", "", number)
-
-    return number
-
-
-def add_correct_phone_columns(df):
-    # Clean column names
-    df.columns = df.columns.astype(str).str.strip().str.upper()
-
-    correct_gsm_values = []
-    fixe_values = []
-
-    for _, row in df.iterrows():
-
-        gsm_numbers = []
-        fixe_numbers = []
-
-        for column in phone_columns:
-
-            if column not in df.columns:
-                continue
-
-            value = row[column]
-
-            if pd.isna(value) or str(value).strip() == "":
-                continue
-
-            phone_type = classify_phone(value)
-            original_number = original_number_as_text(value)
-
-            if phone_type == "GSM":
-                if original_number not in gsm_numbers:
-                    gsm_numbers.append(original_number)
-
-            elif phone_type == "FIXE":
-                if original_number not in fixe_numbers:
-                    fixe_numbers.append(original_number)
-
-        # Several numbers are placed in the same cell using ;
-        correct_gsm_values.append(" ; ".join(gsm_numbers))
-        fixe_values.append(" ; ".join(fixe_numbers))
-
-    # Add new columns without changing GSM, TEL1, TEL2 or TEL3
-    df["CORRECT_GSM"] = correct_gsm_values
-    df["FIXE"] = fixe_values
-
-    return df
-
-
-try:
-    # Read every sheet from the Excel file
-    sheets = pd.read_excel(
-        input_file,
-        sheet_name=None,
-        dtype=object
-    )
-
-    with pd.ExcelWriter(
-        output_file,
-        engine="openpyxl"
-    ) as writer:
-
-        for sheet_name, df in sheets.items():
-
-            print("Processing sheet:", sheet_name)
-
-            corrected_df = add_correct_phone_columns(df.copy())
-
-            corrected_df.to_excel(
-                writer,
-                sheet_name=str(sheet_name)[:31],
-                index=False
-            )
-
-    print("\nDONE")
-    print("The original Excel file was not modified.")
-    print("The new file was saved here:")
-    print(output_file)
-
-except FileNotFoundError:
-    print("The input file was not found.")
-    print("Check this path:")
-    print(input_file)
-
-except PermissionError:
-    print("Permission error.")
-    print("Close the original file and the output file in Excel, then run the code again.")
-
-except Exception as error:
-    print("An error occurred:")
-    print(error)
