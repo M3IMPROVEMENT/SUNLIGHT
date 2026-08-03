@@ -1,150 +1,892 @@
 import pandas as pd
 import re
-
-# =========================
-# FILE PATHS
-# =========================
-
-input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
-output_file = r"C:\Users\Sunlight\Desktop\final_merged.xlsx"
-
-# =========================
-# READ FILE
-# =========================
-
-df = pd.read_excel(input_file)
-
-df.columns = df.columns.astype(str).str.strip().str.upper()
-
-print("Rows before:", len(df))
+import os
+import unicodedata
+from difflib import SequenceMatcher
 
 
-# =========================
-# CLEAN TVA FOR CHECKING
-# =========================
+# ============================================================
+# 1. YOUR PATHS
+# ============================================================
+
+# Your Excel database
+input_file = r"C:\Users\Sunlight\Desktop\my_database.xlsx"
+
+# Folder where you extracted the KBO Open Data ZIP
+kbo_folder = r"C:\Users\Sunlight\Desktop\KBO_OPEN_DATA"
+
+# Output files
+output_clean = r"C:\Users\Sunlight\Desktop\FINAL_KBO_CLEAN.xlsx"
+output_removed = r"C:\Users\Sunlight\Desktop\DUPLICATES_REMOVED.xlsx"
+output_review = r"C:\Users\Sunlight\Desktop\DUPLICATES_TO_REVIEW.xlsx"
+
+
+# ============================================================
+# 2. LOCATE KBO FILES
+# ============================================================
+
+enterprise_file = os.path.join(kbo_folder, "enterprise.csv")
+denomination_file = os.path.join(kbo_folder, "denomination.csv")
+address_file = os.path.join(kbo_folder, "address.csv")
+
+
+for file in [
+    enterprise_file,
+    denomination_file,
+    address_file
+]:
+    if not os.path.exists(file):
+        raise FileNotFoundError(
+            f"KBO file not found:\n{file}"
+        )
+
+
+# ============================================================
+# 3. CLEANING FUNCTIONS
+# ============================================================
 
 def clean_tva(value):
+    """
+    Belgian TVA normalization.
+
+    BE0476241591
+    0476.241.591
+    0476241591
+    be 0476241591
+
+    all become:
+
+    0476241591
+    """
+
     if pd.isna(value):
         return ""
 
     value = str(value).strip().upper()
 
-    # Remove .000000
-    value = re.sub(r"\.0+$", "", value)
+    if value in ["", "NAN", "NONE", "NULL"]:
+        return ""
 
-    # Remove spaces and symbols
-    value = re.sub(r"[^A-Z0-9]", "", value)
+    # Excel decimals
+    value = re.sub(r"\.0+$", "", value)
 
     # Remove BE
     if value.startswith("BE"):
         value = value[2:]
 
-    # Keep digits only
+    # Digits only
     value = re.sub(r"\D", "", value)
+
+    # Belgian enterprise number normally 10 digits
+    if len(value) == 9:
+        value = "0" + value
 
     return value
 
 
-# =========================
-# CLEAN GSM FOR CHECKING
-# =========================
+def normalize_text(value):
+    """
+    Normalize company names and addresses
+    before comparing them.
+    """
 
-def clean_gsm(value):
     if pd.isna(value):
         return ""
 
-    value = str(value).strip()
+    value = str(value).strip().upper()
 
-    value = re.sub(r"\.0+$", "", value)
+    if value in ["", "NAN", "NONE", "NULL"]:
+        return ""
 
-    # Keep digits only
-    value = re.sub(r"\D", "", value)
+    # Remove accents
+    value = unicodedata.normalize("NFKD", value)
 
-    # Remove Belgium prefix
-    if value.startswith("0032"):
-        value = value[4:]
+    value = "".join(
+        c for c in value
+        if not unicodedata.combining(c)
+    )
 
-    elif value.startswith("32"):
-        value = value[2:]
+    # Replace punctuation by spaces
+    value = re.sub(r"[^A-Z0-9]+", " ", value)
 
-    # Remove leading 0
-    if value.startswith("0"):
-        value = value[1:]
+    # Remove extra spaces
+    value = re.sub(r"\s+", " ", value)
 
-    return value
-
-
-# =========================
-# CREATE CHECK COLUMNS
-# =========================
-
-df["_TVA"] = df["TVA"].apply(clean_tva)
-df["_GSM"] = df["GSM"].apply(clean_gsm)
+    return value.strip()
 
 
-# =========================
-# CREATE GROUP KEY
-# =========================
+def similarity(a, b):
 
-def make_key(row):
+    a = normalize_text(a)
+    b = normalize_text(b)
 
-    if row["_TVA"] != "":
-        return "TVA_" + row["_TVA"]
+    if not a or not b:
+        return 0
 
-    if row["_GSM"] != "":
-        return "GSM_" + row["_GSM"]
-
-    return "ROW_" + str(row.name)
-
-
-df["_KEY"] = df.apply(make_key, axis=1)
+    return SequenceMatcher(
+        None,
+        a,
+        b
+    ).ratio() * 100
 
 
-# =========================
-# MERGE DIFFERENT INFORMATION
-# =========================
+# ============================================================
+# 4. READ YOUR EXCEL FILE
+# ============================================================
 
-def merge_info(series):
+df = pd.read_excel(
+    input_file,
+    dtype=str
+)
 
-    values = []
+df.columns = (
+    df.columns
+    .astype(str)
+    .str.strip()
+    .str.upper()
+)
 
-    for value in series:
+
+# ============================================================
+# 5. MAKE COLUMN NAMES COMPATIBLE
+# ============================================================
+
+# Supports TEL1 or TEL 1 style column names
+rename_map = {
+    "TEL 1": "TEL1",
+    "TEL 2": "TEL2",
+    "TEL 3": "TEL3",
+    "COMPLEMENT": "COMPLEMENT",
+    "COMPLIMENT": "COMPLEMENT"
+}
+
+df = df.rename(columns=rename_map)
+
+
+required = [
+    "TVA",
+    "STE",
+    "ADRESSE",
+    "NUMERO",
+    "CP",
+    "VILLE"
+]
+
+for col in required:
+
+    if col not in df.columns:
+        df[col] = ""
+
+
+print("=" * 60)
+print("YOUR DATABASE")
+print("=" * 60)
+
+print("Rows:", len(df))
+
+
+# ============================================================
+# 6. NORMALIZE TVA
+# ============================================================
+
+df["_TVA_CHECK"] = df["TVA"].apply(clean_tva)
+
+
+# ============================================================
+# 7. FIND ONLY DUPLICATED TVA
+# ============================================================
+
+valid_tva = df["_TVA_CHECK"] != ""
+
+duplicate_mask = (
+    valid_tva
+    &
+    df["_TVA_CHECK"].duplicated(
+        keep=False
+    )
+)
+
+duplicate_df = df[
+    duplicate_mask
+].copy()
+
+
+duplicate_tvas = set(
+    duplicate_df["_TVA_CHECK"]
+)
+
+
+print()
+print(
+    "Rows involved in duplicated TVA:",
+    len(duplicate_df)
+)
+
+print(
+    "Different duplicated TVA:",
+    len(duplicate_tvas)
+)
+
+
+# ============================================================
+# 8. IF NO DUPLICATES, STOP
+# ============================================================
+
+if len(duplicate_tvas) == 0:
+
+    df.drop(
+        columns=["_TVA_CHECK"]
+    ).to_excel(
+        output_clean,
+        index=False
+    )
+
+    print()
+    print("✅ No duplicated TVA found.")
+    print("Done.")
+
+    raise SystemExit
+
+
+# ============================================================
+# 9. READ ONLY RELEVANT KBO ENTERPRISES
+#
+# We DO NOT load all Belgian companies into memory.
+# ============================================================
+
+print()
+print("Reading KBO enterprise.csv...")
+
+
+valid_kbo_numbers = set()
+
+
+for chunk in pd.read_csv(
+    enterprise_file,
+    dtype=str,
+    chunksize=200000,
+    low_memory=False
+):
+
+    if "EnterpriseNumber" not in chunk.columns:
+        raise ValueError(
+            "EnterpriseNumber column not found "
+            "in enterprise.csv"
+        )
+
+    chunk["_TVA_CHECK"] = (
+        chunk["EnterpriseNumber"]
+        .apply(clean_tva)
+    )
+
+    found = chunk[
+        chunk["_TVA_CHECK"].isin(
+            duplicate_tvas
+        )
+    ]
+
+    valid_kbo_numbers.update(
+        found["_TVA_CHECK"]
+    )
+
+
+print(
+    "Duplicated TVA found in KBO:",
+    len(valid_kbo_numbers)
+)
+
+
+# ============================================================
+# 10. LOAD OFFICIAL COMPANY NAMES
+# ============================================================
+
+print()
+print("Reading KBO denomination.csv...")
+
+
+kbo_names = {}
+
+
+for chunk in pd.read_csv(
+    denomination_file,
+    dtype=str,
+    chunksize=200000,
+    low_memory=False
+):
+
+    if "EntityNumber" not in chunk.columns:
+        continue
+
+    chunk["_TVA_CHECK"] = (
+        chunk["EntityNumber"]
+        .apply(clean_tva)
+    )
+
+    chunk = chunk[
+        chunk["_TVA_CHECK"].isin(
+            valid_kbo_numbers
+        )
+    ]
+
+
+    for _, row in chunk.iterrows():
+
+        tva = row["_TVA_CHECK"]
+
+        name = row.get(
+            "Denomination",
+            ""
+        )
+
+        if pd.isna(name):
+            continue
+
+        name = str(name).strip()
+
+        if not name:
+            continue
+
+        kbo_names.setdefault(
+            tva,
+            []
+        )
+
+        if name not in kbo_names[tva]:
+            kbo_names[tva].append(name)
+
+
+# ============================================================
+# 11. LOAD OFFICIAL ADDRESSES
+# ============================================================
+
+print("Reading KBO address.csv...")
+
+
+kbo_addresses = {}
+
+
+for chunk in pd.read_csv(
+    address_file,
+    dtype=str,
+    chunksize=200000,
+    low_memory=False
+):
+
+    if "EntityNumber" not in chunk.columns:
+        continue
+
+    chunk["_TVA_CHECK"] = (
+        chunk["EntityNumber"]
+        .apply(clean_tva)
+    )
+
+    chunk = chunk[
+        chunk["_TVA_CHECK"].isin(
+            valid_kbo_numbers
+        )
+    ]
+
+
+    for _, row in chunk.iterrows():
+
+        tva = row["_TVA_CHECK"]
+
+
+        street_fr = row.get(
+            "StreetFR",
+            ""
+        )
+
+        street_nl = row.get(
+            "StreetNL",
+            ""
+        )
+
+        number = row.get(
+            "HouseNumber",
+            ""
+        )
+
+        box = row.get(
+            "Box",
+            ""
+        )
+
+        cp = row.get(
+            "Zipcode",
+            ""
+        )
+
+        city_fr = row.get(
+            "MunicipalityFR",
+            ""
+        )
+
+        city_nl = row.get(
+            "MunicipalityNL",
+            ""
+        )
+
+
+        def safe(v):
+            if pd.isna(v):
+                return ""
+            return str(v).strip()
+
+
+        addresses = []
+
+
+        # French address
+        address_fr = " ".join(
+            filter(
+                None,
+                [
+                    safe(street_fr),
+                    safe(number),
+                    safe(box),
+                    safe(cp),
+                    safe(city_fr)
+                ]
+            )
+        )
+
+
+        # Dutch address
+        address_nl = " ".join(
+            filter(
+                None,
+                [
+                    safe(street_nl),
+                    safe(number),
+                    safe(box),
+                    safe(cp),
+                    safe(city_nl)
+                ]
+            )
+        )
+
+
+        if address_fr:
+            addresses.append(
+                address_fr
+            )
+
+        if (
+            address_nl
+            and
+            address_nl != address_fr
+        ):
+            addresses.append(
+                address_nl
+            )
+
+
+        kbo_addresses.setdefault(
+            tva,
+            []
+        )
+
+
+        for address in addresses:
+
+            if address not in kbo_addresses[tva]:
+
+                kbo_addresses[
+                    tva
+                ].append(address)
+
+
+# ============================================================
+# 12. SCORE EACH DUPLICATE ROW
+# ============================================================
+
+def best_name_score(
+    company_name,
+    official_names
+):
+
+    if not official_names:
+        return 0
+
+    return max(
+        similarity(
+            company_name,
+            official
+        )
+        for official in official_names
+    )
+
+
+def build_local_address(row):
+
+    parts = [
+        row.get("ADRESSE", ""),
+        row.get("NUMERO", ""),
+        row.get("CP", ""),
+        row.get("VILLE", "")
+    ]
+
+    clean_parts = []
+
+    for value in parts:
 
         if pd.isna(value):
             continue
 
         value = str(value).strip()
 
-        if value == "":
-            continue
+        if value:
+            clean_parts.append(value)
 
-        if value not in values:
-            values.append(value)
+    return " ".join(
+        clean_parts
+    )
 
-    return " | ".join(values)
+
+def best_address_score(
+    local_address,
+    official_addresses
+):
+
+    if not official_addresses:
+        return 0
+
+    return max(
+        similarity(
+            local_address,
+            official
+        )
+        for official in official_addresses
+    )
 
 
-# Original columns only
-original_columns = [
-    col for col in df.columns
-    if not col.startswith("_")
+# ============================================================
+# 13. GIVE EACH DUPLICATE A KBO SCORE
+# ============================================================
+
+df["_KBO_NAME_SCORE"] = 0.0
+df["_KBO_ADDRESS_SCORE"] = 0.0
+df["_KBO_TOTAL_SCORE"] = 0.0
+df["_KBO_STATUS"] = ""
+
+
+for index in duplicate_df.index:
+
+    tva = df.at[
+        index,
+        "_TVA_CHECK"
+    ]
+
+
+    # TVA does not exist in current KBO Open Data
+    if tva not in valid_kbo_numbers:
+
+        df.at[
+            index,
+            "_KBO_STATUS"
+        ] = "TVA NOT FOUND IN KBO"
+
+        continue
+
+
+    names = kbo_names.get(
+        tva,
+        []
+    )
+
+    addresses = kbo_addresses.get(
+        tva,
+        []
+    )
+
+
+    company_name = df.at[
+        index,
+        "STE"
+    ]
+
+    local_address = build_local_address(
+        df.loc[index]
+    )
+
+
+    name_score = best_name_score(
+        company_name,
+        names
+    )
+
+
+    address_score = best_address_score(
+        local_address,
+        addresses
+    )
+
+
+    # --------------------------------------------
+    # SCORE
+    #
+    # Company name = 60%
+    # Address      = 40%
+    # --------------------------------------------
+
+    total_score = (
+        name_score * 0.60
+        +
+        address_score * 0.40
+    )
+
+
+    df.at[
+        index,
+        "_KBO_NAME_SCORE"
+    ] = round(
+        name_score,
+        2
+    )
+
+
+    df.at[
+        index,
+        "_KBO_ADDRESS_SCORE"
+    ] = round(
+        address_score,
+        2
+    )
+
+
+    df.at[
+        index,
+        "_KBO_TOTAL_SCORE"
+    ] = round(
+        total_score,
+        2
+    )
+
+
+    df.at[
+        index,
+        "_KBO_STATUS"
+    ] = "FOUND IN KBO"
+
+
+# ============================================================
+# 14. DECIDE WHICH ROW TO KEEP
+# ============================================================
+
+rows_to_remove = []
+
+rows_to_review = []
+
+
+for tva, group in df[
+    duplicate_mask
+].groupby(
+    "_TVA_CHECK"
+):
+
+
+    # --------------------------------------------
+    # TVA not found in KBO
+    #
+    # DO NOT DELETE automatically
+    # --------------------------------------------
+
+    if tva not in valid_kbo_numbers:
+
+        rows_to_review.extend(
+            group.index.tolist()
+        )
+
+        continue
+
+
+    # --------------------------------------------
+    # Sort duplicate rows by KBO score
+    # --------------------------------------------
+
+    sorted_group = group.sort_values(
+        "_KBO_TOTAL_SCORE",
+        ascending=False
+    )
+
+
+    best_index = sorted_group.index[0]
+
+    best_score = df.at[
+        best_index,
+        "_KBO_TOTAL_SCORE"
+    ]
+
+
+    # --------------------------------------------
+    # Safety:
+    #
+    # If KBO comparison is too weak,
+    # DO NOT automatically delete.
+    # --------------------------------------------
+
+    if best_score < 40:
+
+        rows_to_review.extend(
+            group.index.tolist()
+        )
+
+        continue
+
+
+    # --------------------------------------------
+    # Keep best row.
+    # Remove the others.
+    # --------------------------------------------
+
+    other_indices = [
+        idx
+        for idx in group.index
+        if idx != best_index
+    ]
+
+
+    rows_to_remove.extend(
+        other_indices
+    )
+
+
+# ============================================================
+# 15. CREATE FILE OF REMOVED DUPLICATES
+# ============================================================
+
+removed_df = df.loc[
+    rows_to_remove
+].copy()
+
+
+# ============================================================
+# 16. CREATE REVIEW FILE
+# ============================================================
+
+review_df = df.loc[
+    rows_to_review
+].copy()
+
+
+# ============================================================
+# 17. CREATE CLEAN DATABASE
+# ============================================================
+
+clean_df = df.drop(
+    index=rows_to_remove
+).copy()
+
+
+# ============================================================
+# 18. REMOVE REVIEW DUPLICATES FROM AUTOMATIC CLEANING?
+#
+# NO.
+#
+# Review rows stay inside final database because
+# KBO could not safely decide which row was correct.
+# ============================================================
+
+
+# ============================================================
+# 19. REMOVE TEMPORARY COLUMNS FROM CLEAN FILE
+# ============================================================
+
+temporary_columns = [
+    "_TVA_CHECK",
+    "_KBO_NAME_SCORE",
+    "_KBO_ADDRESS_SCORE",
+    "_KBO_TOTAL_SCORE",
+    "_KBO_STATUS"
 ]
 
 
-final_df = (
-    df.groupby("_KEY", sort=False)[original_columns]
-    .agg(merge_info)
-    .reset_index(drop=True)
+clean_df = clean_df.drop(
+    columns=temporary_columns,
+    errors="ignore"
 )
 
 
-# =========================
-# SAVE
-# =========================
+# ============================================================
+# 20. SAVE RESULTS
+# ============================================================
 
-final_df.to_excel(output_file, index=False)
+clean_df.to_excel(
+    output_clean,
+    index=False
+)
 
-print("Rows after:", len(final_df))
-print("Rows merged:", len(df) - len(final_df))
-print("DONE")
-print(output_file)
+
+if len(removed_df) > 0:
+
+    removed_df.to_excel(
+        output_removed,
+        index=False
+    )
+
+
+if len(review_df) > 0:
+
+    review_df.to_excel(
+        output_review,
+        index=False
+    )
+
+
+# ============================================================
+# 21. FINAL REPORT
+# ============================================================
+
+print()
+print("=" * 60)
+print("FINAL RESULT")
+print("=" * 60)
+
+print(
+    "Original rows:",
+    len(df)
+)
+
+print(
+    "Duplicated TVA values:",
+    len(duplicate_tvas)
+)
+
+print(
+    "Duplicated TVA found in KBO:",
+    len(valid_kbo_numbers)
+)
+
+print(
+    "Rows automatically removed:",
+    len(rows_to_remove)
+)
+
+print(
+    "Rows requiring manual review:",
+    len(rows_to_review)
+)
+
+print(
+    "Final rows:",
+    len(clean_df)
+)
+
+print()
+print("✅ FINAL FILE:")
+print(output_clean)
+
+print()
+
+if len(removed_df) > 0:
+    print("🗑 Removed duplicates:")
+    print(output_removed)
+
+if len(review_df) > 0:
+    print()
+    print("⚠️ Needs manual review:")
+    print(output_review)
+
+print()
+print("DONE ✅")
