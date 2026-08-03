@@ -1,18 +1,45 @@
 import pandas as pd
 import re
 
-# ============================================================
+# ==========================================================
 # FILE PATHS
-# ============================================================
+# ==========================================================
 
 input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
+output_file = r"C:\Users\Sunlight\Desktop\FINAL_CLEAN.xlsx"
 
-output_file = r"C:\Users\Sunlight\Desktop\TVA_TO_CHECK_KBO.xlsx"
+
+# ==========================================================
+# READ FILE
+# ==========================================================
+
+df = pd.read_excel(input_file, dtype=str)
+
+df.columns = (
+    df.columns
+    .astype(str)
+    .str.strip()
+    .str.upper()
+)
+
+# Support TEL 1 / TEL1 styles
+df = df.rename(columns={
+    "TEL 1": "TEL1",
+    "TEL 2": "TEL2",
+    "TEL 3": "TEL3"
+})
+
+# Make sure columns exist
+for col in ["TVA", "GSM", "TEL1", "TEL2", "TEL3"]:
+    if col not in df.columns:
+        df[col] = ""
+
+print("Rows before:", len(df))
 
 
-# ============================================================
-# CLEAN TVA
-# ============================================================
+# ==========================================================
+# CLEAN TVA ONLY FOR COMPARISON
+# ==========================================================
 
 def clean_tva(value):
 
@@ -34,123 +61,379 @@ def clean_tva(value):
     # Keep digits only
     value = re.sub(r"\D", "", value)
 
-    # Belgian enterprise numbers = 10 digits
-    # Sometimes Excel/data has removed the first 0
+    # Belgian enterprise number: restore leading zero if needed
     if len(value) == 9:
         value = "0" + value
 
     return value
 
 
-# ============================================================
-# READ YOUR FILE
-# ============================================================
+# ==========================================================
+# CLEAN PHONE ONLY FOR COMPARISON
+# ==========================================================
 
-df = pd.read_excel(
-    input_file,
-    dtype=str
-)
+def clean_phone(value):
 
-df.columns = (
-    df.columns
-    .astype(str)
-    .str.strip()
-    .str.upper()
-)
+    if pd.isna(value):
+        return ""
+
+    value = str(value).strip()
+
+    if value.lower() in ["", "nan", "none", "null"]:
+        return ""
+
+    # Remove Excel decimal
+    value = re.sub(r"\.0+$", "", value)
+
+    # Digits only
+    value = re.sub(r"\D", "", value)
+
+    # Remove Belgium country prefix
+    if value.startswith("0032"):
+        value = value[4:]
+
+    elif value.startswith("32"):
+        value = value[2:]
+
+    # Remove Belgian national leading 0
+    if value.startswith("0"):
+        value = value[1:]
+
+    return value
 
 
-if "TVA" not in df.columns:
-    raise ValueError("TVA column not found.")
+# ==========================================================
+# CLASSIFY PHONE
+# ==========================================================
+
+def phone_type(cleaned):
+
+    if not cleaned:
+        return ""
+
+    # Belgian mobile numbers normally start 4
+    # after removing +32 / 0032 / 32 / 0
+
+    if len(cleaned) == 9 and cleaned.startswith("4"):
+        return "GSM"
+
+    # Fixed numbers normally 8 or 9 digits
+    if len(cleaned) in [8, 9]:
+        return "FIXE"
+
+    return "OTHER"
 
 
-print("Rows in original file:", len(df))
-
-
-# ============================================================
-# NORMALIZE TVA
-# ============================================================
+# ==========================================================
+# CREATE TVA CHECK COLUMN
+# ==========================================================
 
 df["_TVA_CHECK"] = df["TVA"].apply(clean_tva)
 
 
-# ============================================================
-# IGNORE EMPTY TVA
-# ============================================================
+# ==========================================================
+# SCORE ROW COMPLETENESS
+# ==========================================================
 
-valid = df[
+important_columns = [
+    "STE",
+    "TVA",
+    "NOM",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE",
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3"
+]
+
+important_columns = [
+    col for col in important_columns
+    if col in df.columns
+]
+
+
+def completeness_score(row):
+
+    score = 0
+
+    for col in important_columns:
+
+        value = row.get(col, "")
+
+        if pd.isna(value):
+            continue
+
+        value = str(value).strip()
+
+        if value.lower() not in [
+            "",
+            "nan",
+            "none",
+            "null"
+        ]:
+            score += 1
+
+    return score
+
+
+df["_SCORE"] = df.apply(
+    completeness_score,
+    axis=1
+)
+
+
+# ==========================================================
+# PROCESS DUPLICATE TVA GROUPS
+# ==========================================================
+
+final_rows = []
+
+
+# ------------------------------------------
+# Rows WITHOUT TVA:
+# keep them unchanged
+# ------------------------------------------
+
+without_tva = df[
+    df["_TVA_CHECK"] == ""
+].copy()
+
+for _, row in without_tva.iterrows():
+    final_rows.append(row.copy())
+
+
+# ------------------------------------------
+# Rows WITH TVA:
+# one final row per TVA
+# ------------------------------------------
+
+with_tva = df[
     df["_TVA_CHECK"] != ""
 ].copy()
 
 
-# ============================================================
-# FIND DUPLICATED TVA
-# ============================================================
+for tva, group in with_tva.groupby(
+    "_TVA_CHECK",
+    sort=False
+):
 
-duplicates = valid[
-    valid["_TVA_CHECK"].duplicated(
-        keep=False
+    # ======================================================
+    # Choose most complete row
+    # ======================================================
+
+    best_index = group["_SCORE"].idxmax()
+
+    best_row = group.loc[
+        best_index
+    ].copy()
+
+
+    # ======================================================
+    # Collect ALL unique phones from duplicate rows
+    # ======================================================
+
+    unique_phones = {}
+
+    phone_columns = [
+        "GSM",
+        "TEL1",
+        "TEL2",
+        "TEL3"
+    ]
+
+
+    for _, duplicate_row in group.iterrows():
+
+        for col in phone_columns:
+
+            original = duplicate_row.get(
+                col,
+                ""
+            )
+
+            cleaned = clean_phone(
+                original
+            )
+
+            if cleaned == "":
+                continue
+
+            # Same normalized number only once
+            if cleaned not in unique_phones:
+
+                unique_phones[cleaned] = str(
+                    original
+                ).strip()
+
+
+    # ======================================================
+    # Separate mobile / fixed
+    # ======================================================
+
+    gsm_numbers = []
+    fixed_numbers = []
+    other_numbers = []
+
+
+    for cleaned, original in unique_phones.items():
+
+        ptype = phone_type(
+            cleaned
+        )
+
+        if ptype == "GSM":
+
+            gsm_numbers.append(
+                original
+            )
+
+        elif ptype == "FIXE":
+
+            fixed_numbers.append(
+                original
+            )
+
+        else:
+
+            other_numbers.append(
+                original
+            )
+
+
+    # ======================================================
+    # CLEAR PHONE COLUMNS BEFORE REFILLING
+    # ======================================================
+
+    best_row["GSM"] = ""
+    best_row["TEL1"] = ""
+    best_row["TEL2"] = ""
+    best_row["TEL3"] = ""
+
+
+    # ======================================================
+    # PUT GSM BACK
+    # ======================================================
+
+    if len(gsm_numbers) > 0:
+
+        # If several GSM numbers exist,
+        # keep all in GSM separated by |
+        best_row["GSM"] = " | ".join(
+            gsm_numbers
+        )
+
+
+    # ======================================================
+    # PUT FIXED NUMBERS BACK
+    # ======================================================
+
+    fixed_slots = [
+        "TEL1",
+        "TEL2",
+        "TEL3"
+    ]
+
+
+    for i, number in enumerate(
+        fixed_numbers[:3]
+    ):
+
+        best_row[
+            fixed_slots[i]
+        ] = number
+
+
+    # ======================================================
+    # If there are more than 3 fixed numbers,
+    # put extras in TEL3 separated with |
+    # ======================================================
+
+    if len(fixed_numbers) > 3:
+
+        extras = fixed_numbers[2:]
+
+        best_row["TEL3"] = " | ".join(
+            extras
+        )
+
+
+    # ======================================================
+    # Preserve unclassified numbers too
+    # ======================================================
+
+    if len(other_numbers) > 0:
+
+        existing = best_row["TEL3"]
+
+        if existing:
+
+            best_row["TEL3"] = (
+                existing
+                + " | "
+                + " | ".join(other_numbers)
+            )
+
+        else:
+
+            best_row["TEL3"] = (
+                " | ".join(other_numbers)
+            )
+
+
+    final_rows.append(
+        best_row
     )
-].copy()
 
 
-print(
-    "Rows involved in TVA duplicates:",
-    len(duplicates)
+# ==========================================================
+# CREATE FINAL DATAFRAME
+# ==========================================================
+
+final_df = pd.DataFrame(
+    final_rows
 )
 
 
-# ============================================================
-# COUNT HOW MANY TIMES EACH TVA EXISTS
-# ============================================================
-
-counts = (
-    duplicates["_TVA_CHECK"]
-    .value_counts()
-    .reset_index()
-)
-
-counts.columns = [
-    "TVA",
-    "NUMBER_OF_ROWS"
-]
-
-
-# ============================================================
-# ADD BELGIAN TVA FORMAT
-# ============================================================
-
-counts["TVA_BE"] = (
-    "BE" + counts["TVA"]
+# Remove temporary columns
+final_df = final_df.drop(
+    columns=[
+        "_TVA_CHECK",
+        "_SCORE"
+    ],
+    errors="ignore"
 )
 
 
-# ============================================================
-# CREATE KBO LINK
-# ============================================================
-
-# Direct enterprise page
-counts["KBO_LINK"] = counts["TVA"].apply(
-    lambda x:
-    f"https://kbopub.economie.fgov.be/kbopub-m/enterprise/{x}?lang=fr"
-)
-
-
-# ============================================================
+# ==========================================================
 # SAVE
-# ============================================================
+# ==========================================================
 
-counts.to_excel(
+final_df.to_excel(
     output_file,
     index=False
 )
 
 
-print()
-print("Different duplicated TVA:", len(counts))
+# ==========================================================
+# RESULT
+# ==========================================================
 
 print()
-print("File created:")
+print("Rows before:", len(df))
+print("Rows after:", len(final_df))
+
+print(
+    "Duplicate rows removed:",
+    len(df) - len(final_df)
+)
+
+print()
+print("✅ Final clean file:")
 print(output_file)
 
 print()
-print("DONE ✅")
+print("DONE")
