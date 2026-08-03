@@ -1,85 +1,9 @@
-
-import pandas as pd
-
-# =========================
-# FILE PATHS
-# =========================
-
-input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
-output_file = r"C:\Users\Sunlight\Desktop\your_file_without_TVA_duplicates.xlsx"
-
-# =========================
-# READ EXCEL
-# =========================
-
-df = pd.read_excel(input_file)
-
-# Clean column names
-df.columns = df.columns.astype(str).str.strip().str.upper()
-
-# Check TVA column
-if "TVA" not in df.columns:
-    raise ValueError("TVA column not found in the file.")
-
-print("Rows before:", len(df))
-
-# =========================
-# CLEAN TVA FOR COMPARISON
-# =========================
-
-# We create a temporary TVA version only for duplicate checking.
-# The original TVA column is NOT changed.
-
 df["_TVA_CHECK"] = (
     df["TVA"]
     .astype(str)
     .str.strip()
     .str.upper()
     .str.replace(r"\.0+$", "", regex=True)
-    .str.replace(" ", "", regex=False)
+    .str.replace(r"^BE", "", regex=True)   # Remove BE at beginning
+    .str.replace(r"\D", "", regex=True)    # Keep digits only
 )
-
-# Treat empty/NaN TVA as empty
-df.loc[
-    df["_TVA_CHECK"].isin(["", "NAN", "NONE", "NULL"]),
-    "_TVA_CHECK"
-] = ""
-
-# =========================
-# REMOVE DUPLICATES
-# =========================
-
-# Rows with TVA
-with_tva = df[df["_TVA_CHECK"] != ""].copy()
-
-# Rows without TVA
-without_tva = df[df["_TVA_CHECK"] == ""].copy()
-
-# Remove duplicate TVA - keep first occurrence
-with_tva = with_tva.drop_duplicates(
-    subset=["_TVA_CHECK"],
-    keep="first"
-)
-
-# Put everything back together
-final_df = pd.concat(
-    [with_tva, without_tva],
-    ignore_index=False
-)
-
-# Restore original row order
-final_df = final_df.sort_index()
-
-# Remove temporary checking column
-final_df = final_df.drop(columns=["_TVA_CHECK"])
-
-# =========================
-# SAVE
-# =========================
-
-final_df.to_excel(output_file, index=False)
-
-print("Rows after:", len(final_df))
-print("Duplicates removed:", len(df) - len(final_df))
-print("DONE!")
-print("Saved to:", output_file)
