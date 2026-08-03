@@ -1,9 +1,133 @@
-df["_TVA_CHECK"] = (
-    df["TVA"]
-    .astype(str)
-    .str.strip()
-    .str.upper()
-    .str.replace(r"\.0+$", "", regex=True)
-    .str.replace(r"^BE", "", regex=True)   # Remove BE at beginning
-    .str.replace(r"\D", "", regex=True)    # Keep digits only
+import pandas as pd
+import re
+
+# =========================
+# FILE PATHS
+# =========================
+
+input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
+output_file = r"C:\Users\Sunlight\Desktop\merged_without_duplicates.xlsx"
+
+# =========================
+# READ FILE
+# =========================
+
+df = pd.read_excel(input_file)
+
+df.columns = df.columns.astype(str).str.strip().str.upper()
+
+print("Rows before:", len(df))
+
+# =========================
+# NORMALIZATION FUNCTIONS
+# =========================
+
+def clean_text(value):
+    if pd.isna(value):
+        return ""
+    value = str(value).strip()
+
+    if value.lower() in ["nan", "none", "null"]:
+        return ""
+
+    return value
+
+
+def clean_number(value):
+    """
+    Used only for duplicate comparison.
+    Original values are preserved.
+    """
+    if pd.isna(value):
+        return ""
+
+    value = str(value).strip().upper()
+
+    value = re.sub(r"\.0+$", "", value)
+    value = re.sub(r"[\s\-\.\(\)/]", "", value)
+
+    return value
+
+
+# =========================
+# CREATE CHECKING COLUMNS
+# =========================
+
+for col in ["TVA", "GSM", "TEL1", "TEL2", "TEL3"]:
+    if col not in df.columns:
+        df[col] = ""
+
+df["_TVA_CHECK"] = df["TVA"].apply(clean_number)
+df["_GSM_CHECK"] = df["GSM"].apply(clean_number)
+df["_TEL1_CHECK"] = df["TEL1"].apply(clean_number)
+df["_TEL2_CHECK"] = df["TEL2"].apply(clean_number)
+df["_TEL3_CHECK"] = df["TEL3"].apply(clean_number)
+
+# =========================
+# CREATE DUPLICATE KEY
+# =========================
+
+def create_key(row):
+
+    # Priority 1: TVA
+    if row["_TVA_CHECK"] != "":
+        return "TVA_" + row["_TVA_CHECK"]
+
+    # Priority 2: GSM
+    if row["_GSM_CHECK"] != "":
+        return "GSM_" + row["_GSM_CHECK"]
+
+    # If no TVA and no GSM, keep row unique
+    return "ROW_" + str(row.name)
+
+
+df["_GROUP_KEY"] = df.apply(create_key, axis=1)
+
+# =========================
+# MERGE FUNCTION
+# =========================
+
+def merge_values(series):
+
+    values = []
+
+    for value in series:
+
+        value = clean_text(value)
+
+        if value == "":
+            continue
+
+        # Avoid repeating the same information
+        existing_lower = [x.lower() for x in values]
+
+        if value.lower() not in existing_lower:
+            values.append(value)
+
+    return " | ".join(values)
+
+
+# =========================
+# MERGE DUPLICATE ROWS
+# =========================
+
+original_columns = [
+    col for col in df.columns
+    if not col.startswith("_")
+]
+
+merged_df = (
+    df.groupby("_GROUP_KEY", sort=False)[original_columns]
+    .agg(merge_values)
+    .reset_index(drop=True)
 )
+
+# =========================
+# SAVE
+# =========================
+
+merged_df.to_excel(output_file, index=False)
+
+print("Rows after merging:", len(merged_df))
+print("Rows merged:", len(df) - len(merged_df))
+print("Saved to:", output_file)
