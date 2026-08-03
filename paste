@@ -1,133 +1,495 @@
 import pandas as pd
 import re
+import os
 
-# =========================
-# FILE PATHS
-# =========================
+# ============================================================
+# 1. FILE PATHS
+# ============================================================
 
 input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
-output_file = r"C:\Users\Sunlight\Desktop\merged_without_duplicates.xlsx"
 
-# =========================
-# READ FILE
-# =========================
+output_file = r"C:\Users\Sunlight\Desktop\FINAL_NO_DUPLICATES.xlsx"
+
+# Optional: save the groups that were actually merged
+merged_groups_file = r"C:\Users\Sunlight\Desktop\MERGED_DUPLICATES_CHECK.xlsx"
+
+
+# ============================================================
+# 2. READ EXCEL
+# ============================================================
 
 df = pd.read_excel(input_file)
 
-df.columns = df.columns.astype(str).str.strip().str.upper()
+# Clean column names
+df.columns = (
+    df.columns
+    .astype(str)
+    .str.strip()
+    .str.upper()
+)
+
+print("=" * 60)
+print("START")
+print("=" * 60)
 
 print("Rows before:", len(df))
 
-# =========================
-# NORMALIZATION FUNCTIONS
-# =========================
 
-def clean_text(value):
-    if pd.isna(value):
-        return ""
-    value = str(value).strip()
+# ============================================================
+# 3. MAKE SURE IMPORTANT COLUMNS EXIST
+# ============================================================
 
-    if value.lower() in ["nan", "none", "null"]:
-        return ""
+important_columns = [
+    "TVA",
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3"
+]
 
-    return value
+for col in important_columns:
+    if col not in df.columns:
+        df[col] = ""
 
 
-def clean_number(value):
+# ============================================================
+# 4. CLEAN TVA ONLY FOR COMPARISON
+# ============================================================
+
+def clean_tva(value):
     """
-    Used only for duplicate comparison.
-    Original values are preserved.
+    Normalize Belgian TVA ONLY for duplicate checking.
+
+    Examples considered identical:
+
+    BE0123456789
+    be0123456789
+    Be 0123 456 789
+    0123456789
+    0123456789.000000
+
+    -> 0123456789
+
+    The original TVA column is NOT modified.
     """
+
     if pd.isna(value):
         return ""
 
     value = str(value).strip().upper()
 
+    if value in ["", "NAN", "NONE", "NULL"]:
+        return ""
+
+    # Remove Excel decimal ending
     value = re.sub(r"\.0+$", "", value)
-    value = re.sub(r"[\s\-\.\(\)/]", "", value)
+
+    # Remove spaces / punctuation
+    value = re.sub(r"[^A-Z0-9]", "", value)
+
+    # Remove Belgian BE prefix
+    if value.startswith("BE"):
+        value = value[2:]
+
+    # Keep digits only
+    value = re.sub(r"\D", "", value)
 
     return value
 
 
-# =========================
-# CREATE CHECKING COLUMNS
-# =========================
+# ============================================================
+# 5. CLEAN PHONE ONLY FOR COMPARISON
+# ============================================================
 
-for col in ["TVA", "GSM", "TEL1", "TEL2", "TEL3"]:
-    if col not in df.columns:
-        df[col] = ""
+def clean_phone(value):
+    """
+    Normalize phone numbers ONLY for duplicate checking.
 
-df["_TVA_CHECK"] = df["TVA"].apply(clean_number)
-df["_GSM_CHECK"] = df["GSM"].apply(clean_number)
-df["_TEL1_CHECK"] = df["TEL1"].apply(clean_number)
-df["_TEL2_CHECK"] = df["TEL2"].apply(clean_number)
-df["_TEL3_CHECK"] = df["TEL3"].apply(clean_number)
+    Examples:
 
-# =========================
-# CREATE DUPLICATE KEY
-# =========================
+    +32 475 12 34 56
+    0032 475 12 34 56
+    32475123456
+    0475123456
 
-def create_key(row):
+    become:
 
-    # Priority 1: TVA
-    if row["_TVA_CHECK"] != "":
-        return "TVA_" + row["_TVA_CHECK"]
+    475123456
 
-    # Priority 2: GSM
-    if row["_GSM_CHECK"] != "":
-        return "GSM_" + row["_GSM_CHECK"]
+    Original phone columns are NOT modified.
+    """
 
-    # If no TVA and no GSM, keep row unique
-    return "ROW_" + str(row.name)
+    if pd.isna(value):
+        return ""
+
+    value = str(value).strip()
+
+    if value.lower() in ["", "nan", "none", "null"]:
+        return ""
+
+    # Remove Excel .000000
+    value = re.sub(r"\.0+$", "", value)
+
+    # Keep digits only
+    value = re.sub(r"\D", "", value)
+
+    # 0032xxxxxxxxx
+    if value.startswith("0032"):
+        value = value[4:]
+
+    # 32xxxxxxxxx
+    elif value.startswith("32"):
+        value = value[2:]
+
+    # Belgian national leading 0
+    if value.startswith("0"):
+        value = value[1:]
+
+    return value
 
 
-df["_GROUP_KEY"] = df.apply(create_key, axis=1)
+# ============================================================
+# 6. CREATE TEMPORARY CHECKING COLUMNS
+# ============================================================
 
-# =========================
-# MERGE FUNCTION
-# =========================
+df["_TVA_CHECK"] = df["TVA"].apply(clean_tva)
+
+df["_GSM_CHECK"] = df["GSM"].apply(clean_phone)
+
+df["_TEL1_CHECK"] = df["TEL1"].apply(clean_phone)
+
+df["_TEL2_CHECK"] = df["TEL2"].apply(clean_phone)
+
+df["_TEL3_CHECK"] = df["TEL3"].apply(clean_phone)
+
+
+# ============================================================
+# 7. UNION-FIND
+#
+# This allows us to detect connected duplicates.
+#
+# Example:
+#
+# Row 1 TVA = A, GSM = X
+# Row 2 TVA = A, GSM = Y
+# Row 3 TVA = B, GSM = Y
+#
+# All three belong to the same company group.
+# ============================================================
+
+n = len(df)
+
+parent = list(range(n))
+
+
+def find(x):
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    return x
+
+
+def union(a, b):
+
+    root_a = find(a)
+    root_b = find(b)
+
+    if root_a != root_b:
+        parent[root_b] = root_a
+
+
+# ============================================================
+# 8. FIND SAME TVA
+# ============================================================
+
+seen_tva = {}
+
+for i, tva in enumerate(df["_TVA_CHECK"]):
+
+    if tva == "":
+        continue
+
+    if tva in seen_tva:
+        union(i, seen_tva[tva])
+
+    else:
+        seen_tva[tva] = i
+
+
+# ============================================================
+# 9. FIND SAME GSM
+# ============================================================
+
+seen_gsm = {}
+
+for i, gsm in enumerate(df["_GSM_CHECK"]):
+
+    if gsm == "":
+        continue
+
+    if gsm in seen_gsm:
+        union(i, seen_gsm[gsm])
+
+    else:
+        seen_gsm[gsm] = i
+
+
+# ============================================================
+# 10. CREATE GROUP ID
+# ============================================================
+
+df["_GROUP_ID"] = [
+    find(i)
+    for i in range(n)
+]
+
+
+# ============================================================
+# 11. IDENTIFY GROUPS THAT WILL BE MERGED
+# ============================================================
+
+group_sizes = df.groupby("_GROUP_ID").size()
+
+duplicate_group_ids = group_sizes[
+    group_sizes > 1
+].index
+
+duplicates_before_merge = df[
+    df["_GROUP_ID"].isin(duplicate_group_ids)
+].copy()
+
+print()
+print("Rows involved in duplicate groups:",
+      len(duplicates_before_merge))
+
+print("Duplicate groups:",
+      len(duplicate_group_ids))
+
+
+# ============================================================
+# 12. MERGE VALUES WITHOUT LOSING INFORMATION
+# ============================================================
 
 def merge_values(series):
+    """
+    Keep all different non-empty information.
+
+    Example:
+
+    ABC SPRL
+    ABC COMPANY
+    ABC SPRL
+
+    becomes:
+
+    ABC SPRL | ABC COMPANY
+    """
 
     values = []
 
+    seen = set()
+
     for value in series:
 
-        value = clean_text(value)
-
-        if value == "":
+        if pd.isna(value):
             continue
 
-        # Avoid repeating the same information
-        existing_lower = [x.lower() for x in values]
+        value = str(value).strip()
 
-        if value.lower() not in existing_lower:
+        if value.lower() in [
+            "",
+            "nan",
+            "none",
+            "null"
+        ]:
+            continue
+
+        check = value.lower()
+
+        if check not in seen:
+
+            seen.add(check)
+
             values.append(value)
 
     return " | ".join(values)
 
 
-# =========================
-# MERGE DUPLICATE ROWS
-# =========================
+# ============================================================
+# 13. ORIGINAL COLUMNS ONLY
+# ============================================================
 
 original_columns = [
-    col for col in df.columns
+    col
+    for col in df.columns
     if not col.startswith("_")
 ]
 
+
+# ============================================================
+# 14. MERGE THE GROUPS
+# ============================================================
+
 merged_df = (
-    df.groupby("_GROUP_KEY", sort=False)[original_columns]
+    df
+    .groupby(
+        "_GROUP_ID",
+        sort=False
+    )[original_columns]
     .agg(merge_values)
     .reset_index(drop=True)
 )
 
-# =========================
-# SAVE
-# =========================
 
-merged_df.to_excel(output_file, index=False)
+# ============================================================
+# 15. SAVE FINAL FILE
+# ============================================================
 
-print("Rows after merging:", len(merged_df))
-print("Rows merged:", len(df) - len(merged_df))
-print("Saved to:", output_file)
+merged_df.to_excel(
+    output_file,
+    index=False
+)
+
+
+# ============================================================
+# 16. SAVE DUPLICATES FOR MANUAL CHECK
+# ============================================================
+
+if len(duplicates_before_merge) > 0:
+
+    check_columns = (
+        original_columns
+        +
+        [
+            "_TVA_CHECK",
+            "_GSM_CHECK",
+            "_GROUP_ID"
+        ]
+    )
+
+    duplicates_before_merge[
+        check_columns
+    ].to_excel(
+        merged_groups_file,
+        index=False
+    )
+
+
+# ============================================================
+# 17. VERIFY TVA DUPLICATION AFTER MERGING
+# ============================================================
+
+# Because merged cells can contain:
+# BE0123456789 | 0123456789
+#
+# we check every individual value.
+
+all_tvas = []
+
+for value in merged_df["TVA"]:
+
+    if pd.isna(value):
+        continue
+
+    parts = str(value).split("|")
+
+    for part in parts:
+
+        tva = clean_tva(part)
+
+        if tva != "":
+            all_tvas.append(tva)
+
+
+tva_series = pd.Series(all_tvas)
+
+duplicate_tva_after = tva_series[
+    tva_series.duplicated(keep=False)
+]
+
+
+# ============================================================
+# 18. VERIFY GSM DUPLICATION AFTER MERGING
+# ============================================================
+
+all_gsm = []
+
+for value in merged_df["GSM"]:
+
+    if pd.isna(value):
+        continue
+
+    parts = str(value).split("|")
+
+    for part in parts:
+
+        gsm = clean_phone(part)
+
+        if gsm != "":
+            all_gsm.append(gsm)
+
+
+gsm_series = pd.Series(all_gsm)
+
+duplicate_gsm_after = gsm_series[
+    gsm_series.duplicated(keep=False)
+]
+
+
+# ============================================================
+# 19. FINAL REPORT
+# ============================================================
+
+print()
+print("=" * 60)
+print("FINAL REPORT")
+print("=" * 60)
+
+print("Rows before:", len(df))
+
+print("Rows after:", len(merged_df))
+
+print(
+    "Rows merged:",
+    len(df) - len(merged_df)
+)
+
+print()
+
+print(
+    "Duplicated TVA remaining:",
+    duplicate_tva_after.nunique()
+)
+
+print(
+    "Duplicated GSM remaining:",
+    duplicate_gsm_after.nunique()
+)
+
+
+if (
+    duplicate_tva_after.empty
+    and duplicate_gsm_after.empty
+):
+
+    print()
+    print("✅ NO DUPLICATE TVA OR GSM FOUND")
+
+else:
+
+    print()
+    print("⚠️ CHECK REQUIRED")
+
+
+print()
+print("Final file:")
+print(output_file)
+
+if len(duplicates_before_merge) > 0:
+
+    print()
+    print("Duplicate audit file:")
+    print(merged_groups_file)
+
+print()
+print("DONE!")
