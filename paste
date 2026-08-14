@@ -1,439 +1,50 @@
-import pandas as pd
-import re
-
-# ==========================================================
-# FILE PATHS
-# ==========================================================
-
-input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
-output_file = r"C:\Users\Sunlight\Desktop\FINAL_CLEAN.xlsx"
-
-
-# ==========================================================
-# READ FILE
-# ==========================================================
-
-df = pd.read_excel(input_file, dtype=str)
-
-df.columns = (
-    df.columns
-    .astype(str)
-    .str.strip()
-    .str.upper()
-)
-
-# Support TEL 1 / TEL1 styles
-df = df.rename(columns={
-    "TEL 1": "TEL1",
-    "TEL 2": "TEL2",
-    "TEL 3": "TEL3"
-})
-
-# Make sure columns exist
-for col in ["TVA", "GSM", "TEL1", "TEL2", "TEL3"]:
-    if col not in df.columns:
-        df[col] = ""
-
-print("Rows before:", len(df))
-
-
-# ==========================================================
-# CLEAN TVA ONLY FOR COMPARISON
-# ==========================================================
-
-def clean_tva(value):
-
-    if pd.isna(value):
-        return ""
-
-    value = str(value).strip().upper()
-
-    if value in ["", "NAN", "NONE", "NULL"]:
-        return ""
-
-    # Remove Excel .000000
-    value = re.sub(r"\.0+$", "", value)
-
-    # Remove BE
-    if value.startswith("BE"):
-        value = value[2:]
-
-    # Keep digits only
-    value = re.sub(r"\D", "", value)
-
-    # Belgian enterprise number: restore leading zero if needed
-    if len(value) == 9:
-        value = "0" + value
-
-    return value
-
-
-# ==========================================================
-# CLEAN PHONE ONLY FOR COMPARISON
-# ==========================================================
-
-def clean_phone(value):
-
-    if pd.isna(value):
-        return ""
-
-    value = str(value).strip()
-
-    if value.lower() in ["", "nan", "none", "null"]:
-        return ""
-
-    # Remove Excel decimal
-    value = re.sub(r"\.0+$", "", value)
-
-    # Digits only
-    value = re.sub(r"\D", "", value)
-
-    # Remove Belgium country prefix
-    if value.startswith("0032"):
-        value = value[4:]
-
-    elif value.startswith("32"):
-        value = value[2:]
-
-    # Remove Belgian national leading 0
-    if value.startswith("0"):
-        value = value[1:]
-
-    return value
-
-
-# ==========================================================
-# CLASSIFY PHONE
-# ==========================================================
-
-def phone_type(cleaned):
-
-    if not cleaned:
-        return ""
-
-    # Belgian mobile numbers normally start 4
-    # after removing +32 / 0032 / 32 / 0
-
-    if len(cleaned) == 9 and cleaned.startswith("4"):
-        return "GSM"
-
-    # Fixed numbers normally 8 or 9 digits
-    if len(cleaned) in [8, 9]:
-        return "FIXE"
-
-    return "OTHER"
-
-
-# ==========================================================
-# CREATE TVA CHECK COLUMN
-# ==========================================================
-
-df["_TVA_CHECK"] = df["TVA"].apply(clean_tva)
-
-
-# ==========================================================
-# SCORE ROW COMPLETENESS
-# ==========================================================
-
-important_columns = [
-    "STE",
-    "TVA",
-    "NOM",
-    "ADRESSE",
-    "NUMERO",
-    "COMPLEMENT",
-    "CP",
-    "VILLE",
-    "GSM",
-    "TEL1",
-    "TEL2",
-    "TEL3"
-]
-
-important_columns = [
-    col for col in important_columns
-    if col in df.columns
-]
-
-
-def completeness_score(row):
-
-    score = 0
-
-    for col in important_columns:
-
-        value = row.get(col, "")
-
-        if pd.isna(value):
-            continue
-
-        value = str(value).strip()
-
-        if value.lower() not in [
-            "",
-            "nan",
-            "none",
-            "null"
-        ]:
-            score += 1
-
-    return score
-
-
-df["_SCORE"] = df.apply(
-    completeness_score,
-    axis=1
-)
-
-
-# ==========================================================
-# PROCESS DUPLICATE TVA GROUPS
-# ==========================================================
-
-final_rows = []
-
-
-# ------------------------------------------
-# Rows WITHOUT TVA:
-# keep them unchanged
-# ------------------------------------------
-
-without_tva = df[
-    df["_TVA_CHECK"] == ""
-].copy()
-
-for _, row in without_tva.iterrows():
-    final_rows.append(row.copy())
-
-
-# ------------------------------------------
-# Rows WITH TVA:
-# one final row per TVA
-# ------------------------------------------
-
-with_tva = df[
-    df["_TVA_CHECK"] != ""
-].copy()
-
-
-for tva, group in with_tva.groupby(
-    "_TVA_CHECK",
-    sort=False
-):
-
-    # ======================================================
-    # Choose most complete row
-    # ======================================================
-
-    best_index = group["_SCORE"].idxmax()
-
-    best_row = group.loc[
-        best_index
-    ].copy()
-
-
-    # ======================================================
-    # Collect ALL unique phones from duplicate rows
-    # ======================================================
-
-    unique_phones = {}
-
-    phone_columns = [
-        "GSM",
-        "TEL1",
-        "TEL2",
-        "TEL3"
-    ]
-
-
-    for _, duplicate_row in group.iterrows():
-
-        for col in phone_columns:
-
-            original = duplicate_row.get(
-                col,
-                ""
-            )
-
-            cleaned = clean_phone(
-                original
-            )
-
-            if cleaned == "":
-                continue
-
-            # Same normalized number only once
-            if cleaned not in unique_phones:
-
-                unique_phones[cleaned] = str(
-                    original
-                ).strip()
-
-
-    # ======================================================
-    # Separate mobile / fixed
-    # ======================================================
-
-    gsm_numbers = []
-    fixed_numbers = []
-    other_numbers = []
-
-
-    for cleaned, original in unique_phones.items():
-
-        ptype = phone_type(
-            cleaned
-        )
-
-        if ptype == "GSM":
-
-            gsm_numbers.append(
-                original
-            )
-
-        elif ptype == "FIXE":
-
-            fixed_numbers.append(
-                original
-            )
-
-        else:
-
-            other_numbers.append(
-                original
-            )
-
-
-    # ======================================================
-    # CLEAR PHONE COLUMNS BEFORE REFILLING
-    # ======================================================
-
-    best_row["GSM"] = ""
-    best_row["TEL1"] = ""
-    best_row["TEL2"] = ""
-    best_row["TEL3"] = ""
-
-
-    # ======================================================
-    # PUT GSM BACK
-    # ======================================================
-
-    if len(gsm_numbers) > 0:
-
-        # If several GSM numbers exist,
-        # keep all in GSM separated by |
-        best_row["GSM"] = " | ".join(
-            gsm_numbers
-        )
-
-
-    # ======================================================
-    # PUT FIXED NUMBERS BACK
-    # ======================================================
-
-    fixed_slots = [
-        "TEL1",
-        "TEL2",
-        "TEL3"
-    ]
-
-
-    for i, number in enumerate(
-        fixed_numbers[:3]
-    ):
-
-        best_row[
-            fixed_slots[i]
-        ] = number
-
-
-    # ======================================================
-    # If there are more than 3 fixed numbers,
-    # put extras in TEL3 separated with |
-    # ======================================================
-
-    if len(fixed_numbers) > 3:
-
-        extras = fixed_numbers[2:]
-
-        best_row["TEL3"] = " | ".join(
-            extras
-        )
-
-
-    # ======================================================
-    # Preserve unclassified numbers too
-    # ======================================================
-
-    if len(other_numbers) > 0:
-
-        existing = best_row["TEL3"]
-
-        if existing:
-
-            best_row["TEL3"] = (
-                existing
-                + " | "
-                + " | ".join(other_numbers)
-            )
-
-        else:
-
-            best_row["TEL3"] = (
-                " | ".join(other_numbers)
-            )
-
-
-    final_rows.append(
-        best_row
-    )
-
-
-# ==========================================================
-# CREATE FINAL DATAFRAME
-# ==========================================================
-
-final_df = pd.DataFrame(
-    final_rows
-)
-
-
-# Remove temporary columns
-final_df = final_df.drop(
-    columns=[
-        "_TVA_CHECK",
-        "_SCORE"
-    ],
-    errors="ignore"
-)
-
-
-# ==========================================================
-# SAVE
-# ==========================================================
-
-final_df.to_excel(
-    output_file,
-    index=False
-)
-
-
-# ==========================================================
-# RESULT
-# ==========================================================
-
-print()
-print("Rows before:", len(df))
-print("Rows after:", len(final_df))
-
-print(
-    "Duplicate rows removed:",
-    len(df) - len(final_df)
-)
-
-print()
-print("✅ Final clean file:")
-print(output_file)
-
-print()
-print("DONE")
+--------------------------------------------------------------------------
+InvalidIndexError                         Traceback (most recent call last)
+Cell In[3], line 50
+     46 
+     47     all_data.append(df)
+     48 
+     49 # Merge all files
+---> 50 master = pd.concat(all_data, ignore_index=True)
+     51 
+     52 # ==========================
+     53 # CLEAN AND CHECK CP
+
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\reshape\concat.py:466, in concat(objs, axis, join, ignore_index, keys, levels, names, verify_integrity, sort, copy)
+    464 axis = 1 - bm_axis if is_frame else 0
+    465 names = names or getattr(keys, "names", None)
+--> 466 result = _get_result(
+    467     objs,
+    468     is_series,
+    469     bm_axis,
+    470     ignore_index,
+    471     intersect,
+    472     sort,
+    473     keys,
+    474     levels,
+    475     verify_integrity,
+    476     names,
+    477     axis,
+    478 )
+    480 if sort is lib.no_default:
+    481     if orig_axis == 0:
+
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\reshape\concat.py:653, in _get_result(objs, is_series, bm_axis, ignore_index, intersect, sort, keys, levels, verify_integrity, names, axis)
+    651         obj_labels = obj.axes[1 - ax]
+    652         if not new_labels.equals(obj_labels):
+--> 653             indexers[ax] = obj_labels.get_indexer(new_labels)
+    655     mgrs_indexers.append((obj._mgr, indexers))
+    657 new_data = concatenate_managers(
+    658     mgrs_indexers, result_axes, concat_axis=bm_axis, copy=False
+    659 )
+
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\indexes\base.py:3728, in Index.get_indexer(self, target, method, limit, tolerance)
+   3725 self._check_indexing_method(method, limit, tolerance)
+   3727 if not self._index_as_unique:
+-> 3728     raise InvalidIndexError(self._requires_unique_msg)
+   3730 if len(target) == 0:
+   3731     return np.array([], dtype=np.intp)
+
+InvalidIndexError: Reindexing only valid with uniquely valued Index objects
+
+Click to add a cell.
