@@ -1,50 +1,50 @@
---------------------------------------------------------------------------
-InvalidIndexError                         Traceback (most recent call last)
-Cell In[3], line 50
-     46 
-     47     all_data.append(df)
-     48 
-     49 # Merge all files
----> 50 master = pd.concat(all_data, ignore_index=True)
-     51 
-     52 # ==========================
-     53 # CLEAN AND CHECK CP
+import pandas as pd
+from pathlib import Path
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\reshape\concat.py:466, in concat(objs, axis, join, ignore_index, keys, levels, names, verify_integrity, sort, copy)
-    464 axis = 1 - bm_axis if is_frame else 0
-    465 names = names or getattr(keys, "names", None)
---> 466 result = _get_result(
-    467     objs,
-    468     is_series,
-    469     bm_axis,
-    470     ignore_index,
-    471     intersect,
-    472     sort,
-    473     keys,
-    474     levels,
-    475     verify_integrity,
-    476     names,
-    477     axis,
-    478 )
-    480 if sort is lib.no_default:
-    481     if orig_axis == 0:
+# ==========================
+# FOLDER CONTAINING YOUR FILES
+# ==========================
+folder = Path(r"C:\YOUR\FOLDER\PATH")
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\reshape\concat.py:653, in _get_result(objs, is_series, bm_axis, ignore_index, intersect, sort, keys, levels, verify_integrity, names, axis)
-    651         obj_labels = obj.axes[1 - ax]
-    652         if not new_labels.equals(obj_labels):
---> 653             indexers[ax] = obj_labels.get_indexer(new_labels)
-    655     mgrs_indexers.append((obj._mgr, indexers))
-    657 new_data = concatenate_managers(
-    658     mgrs_indexers, result_axes, concat_axis=bm_axis, copy=False
-    659 )
+# Find Excel files
+files = list(folder.glob("*.xlsx")) + list(folder.glob("*.xls"))
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\indexes\base.py:3728, in Index.get_indexer(self, target, method, limit, tolerance)
-   3725 self._check_indexing_method(method, limit, tolerance)
-   3727 if not self._index_as_unique:
--> 3728     raise InvalidIndexError(self._requires_unique_msg)
-   3730 if len(target) == 0:
-   3731     return np.array([], dtype=np.intp)
+print(f"Found {len(files)} Excel files\n")
 
-InvalidIndexError: Reindexing only valid with uniquely valued Index objects
+# ==========================
+# CHECK EACH FILE
+# ==========================
+found = False
 
-Click to add a cell.
+for file in files:
+    try:
+        # Read only the header
+        df = pd.read_excel(file, nrows=0)
+
+        # Clean column names
+        columns = df.columns.astype(str).str.strip()
+
+        # Find duplicated column names
+        duplicates = columns[columns.duplicated()].unique().tolist()
+
+        if duplicates:
+            found = True
+
+            print("=" * 70)
+            print("DUPLICATE COLUMNS FOUND")
+            print("File:", file.name)
+            print("Path:", file)
+            print("Duplicated columns:", duplicates)
+            print("=" * 70)
+
+    except Exception as e:
+        print(f"ERROR reading: {file.name}")
+        print(e)
+
+# ==========================
+# FINAL RESULT
+# ==========================
+if not found:
+    print("\n✅ No duplicate column names found in any Excel file.")
+else:
+    print("\n⚠️ Duplicate columns were found. Check the files listed above.")
