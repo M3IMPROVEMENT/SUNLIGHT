@@ -1,50 +1,409 @@
 import pandas as pd
-from pathlib import Path
+import re
 
-# ==========================
-# FOLDER CONTAINING YOUR FILES
-# ==========================
-folder = Path(r"C:\YOUR\FOLDER\PATH")
+# ==========================================================
+# FILE PATHS
+# ==========================================================
 
-# Find Excel files
-files = list(folder.glob("*.xlsx")) + list(folder.glob("*.xls"))
+input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
 
-print(f"Found {len(files)} Excel files\n")
+output_clean = r"C:\Users\Sunlight\Desktop\FINAL_WITHOUT_DUPLICATE_TVA.xlsx"
 
-# ==========================
-# CHECK EACH FILE
-# ==========================
-found = False
+output_no_tva = r"C:\Users\Sunlight\Desktop\ROWS_WITHOUT_TVA.xlsx"
 
-for file in files:
-    try:
-        # Read only the header
-        df = pd.read_excel(file, nrows=0)
 
-        # Clean column names
-        columns = df.columns.astype(str).str.strip()
+# ==========================================================
+# READ FILE
+# ==========================================================
 
-        # Find duplicated column names
-        duplicates = columns[columns.duplicated()].unique().tolist()
+df = pd.read_excel(input_file, dtype=str)
 
-        if duplicates:
-            found = True
+df.columns = (
+    df.columns
+    .astype(str)
+    .str.strip()
+    .str.upper()
+)
 
-            print("=" * 70)
-            print("DUPLICATE COLUMNS FOUND")
-            print("File:", file.name)
-            print("Path:", file)
-            print("Duplicated columns:", duplicates)
-            print("=" * 70)
+df = df.rename(columns={
+    "TEL 1": "TEL1",
+    "TEL 2": "TEL2",
+    "TEL 3": "TEL3"
+})
 
-    except Exception as e:
-        print(f"ERROR reading: {file.name}")
-        print(e)
+# Make sure columns exist
+for col in ["TVA", "GSM", "TEL1", "TEL2", "TEL3"]:
+    if col not in df.columns:
+        df[col] = ""
 
-# ==========================
-# FINAL RESULT
-# ==========================
-if not found:
-    print("\n✅ No duplicate column names found in any Excel file.")
-else:
-    print("\n⚠️ Duplicate columns were found. Check the files listed above.")
+print("Rows before:", len(df))
+
+
+# ==========================================================
+# NORMALIZE TVA
+# ==========================================================
+
+def clean_tva(value):
+
+    if pd.isna(value):
+        return ""
+
+    value = str(value).strip().upper()
+
+    if value in ["", "NAN", "NONE", "NULL"]:
+        return ""
+
+    # Remove Excel .000000
+    value = re.sub(r"\.0+$", "", value)
+
+    # Remove BE
+    if value.startswith("BE"):
+        value = value[2:]
+
+    # Keep digits only
+    value = re.sub(r"\D", "", value)
+
+    # Belgian TVA = 10 digits
+    if len(value) == 9:
+        value = "0" + value
+
+    return value
+
+
+df["_TVA_CHECK"] = df["TVA"].apply(clean_tva)
+
+
+# ==========================================================
+# SEPARATE ROWS WITHOUT TVA
+# ==========================================================
+
+no_tva = df[
+    df["_TVA_CHECK"] == ""
+].copy()
+
+no_tva = no_tva.drop(
+    columns=["_TVA_CHECK"]
+)
+
+no_tva.to_excel(
+    output_no_tva,
+    index=False
+)
+
+
+# ==========================================================
+# KEEP ONLY ROWS WITH TVA
+# ==========================================================
+
+with_tva = df[
+    df["_TVA_CHECK"] != ""
+].copy()
+
+
+# ==========================================================
+# COMPLETENESS SCORE
+# ==========================================================
+
+important_columns = [
+    "STE",
+    "TVA",
+    "NOM",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE",
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3"
+]
+
+important_columns = [
+    col for col in important_columns
+    if col in with_tva.columns
+]
+
+
+def score_row(row):
+
+    score = 0
+
+    for col in important_columns:
+
+        value = row.get(col, "")
+
+        if pd.isna(value):
+            continue
+
+        value = str(value).strip()
+
+        if value.lower() not in [
+            "",
+            "nan",
+            "none",
+            "null"
+        ]:
+            score += 1
+
+    return score
+
+
+with_tva["_SCORE"] = with_tva.apply(
+    score_row,
+    axis=1
+)
+
+
+# ==========================================================
+# CLEAN PHONE FOR COMPARISON
+# ==========================================================
+
+def clean_phone(value):
+
+    if pd.isna(value):
+        return ""
+
+    value = str(value).strip()
+
+    if value.lower() in [
+        "",
+        "nan",
+        "none",
+        "null"
+    ]:
+        return ""
+
+    # Remove Excel decimal
+    value = re.sub(r"\.0+$", "", value)
+
+    # Keep digits
+    value = re.sub(r"\D", "", value)
+
+    # Belgium international
+    if value.startswith("0032"):
+        value = value[4:]
+
+    elif value.startswith("32"):
+        value = value[2:]
+
+    # National leading 0
+    if value.startswith("0"):
+        value = value[1:]
+
+    return value
+
+
+# ==========================================================
+# PROCESS EACH TVA
+# ==========================================================
+
+final_rows = []
+
+
+for tva, group in with_tva.groupby(
+    "_TVA_CHECK",
+    sort=False
+):
+
+    # ------------------------------------------------------
+    # Choose the most complete row
+    # ------------------------------------------------------
+
+    best_index = group["_SCORE"].idxmax()
+
+    best_row = group.loc[
+        best_index
+    ].copy()
+
+
+    # ------------------------------------------------------
+    # COLLECT ALL UNIQUE PHONE NUMBERS
+    # ------------------------------------------------------
+
+    phones = {}
+
+    for _, row in group.iterrows():
+
+        for col in [
+            "GSM",
+            "TEL1",
+            "TEL2",
+            "TEL3"
+        ]:
+
+            original = row.get(
+                col,
+                ""
+            )
+
+            cleaned = clean_phone(
+                original
+            )
+
+            if cleaned == "":
+                continue
+
+            # Keep only once
+            if cleaned not in phones:
+
+                phones[cleaned] = str(
+                    original
+                ).strip()
+
+
+    # ------------------------------------------------------
+    # Separate GSM and fixed
+    # ------------------------------------------------------
+
+    gsm_numbers = []
+    fixed_numbers = []
+
+
+    for cleaned, original in phones.items():
+
+        # Belgian GSM
+        if len(cleaned) == 9 and cleaned.startswith("4"):
+
+            gsm_numbers.append(
+                original
+            )
+
+        # Belgian fixed
+        else:
+
+            fixed_numbers.append(
+                original
+            )
+
+
+    # ------------------------------------------------------
+    # CLEAR PHONE COLUMNS
+    # ------------------------------------------------------
+
+    best_row["GSM"] = ""
+    best_row["TEL1"] = ""
+    best_row["TEL2"] = ""
+    best_row["TEL3"] = ""
+
+
+    # ------------------------------------------------------
+    # RESTORE ALL GSM
+    # ------------------------------------------------------
+
+    if gsm_numbers:
+
+        best_row["GSM"] = " | ".join(
+            gsm_numbers
+        )
+
+
+    # ------------------------------------------------------
+    # RESTORE FIXED NUMBERS
+    # ------------------------------------------------------
+
+    if len(fixed_numbers) >= 1:
+
+        best_row["TEL1"] = fixed_numbers[0]
+
+    if len(fixed_numbers) >= 2:
+
+        best_row["TEL2"] = fixed_numbers[1]
+
+    if len(fixed_numbers) >= 3:
+
+        best_row["TEL3"] = fixed_numbers[2]
+
+
+    # More than 3 fixed numbers:
+    # keep the rest in TEL3 instead of losing them
+
+    if len(fixed_numbers) > 3:
+
+        best_row["TEL3"] = " | ".join(
+            fixed_numbers[2:]
+        )
+
+
+    # ------------------------------------------------------
+    # ADD FINAL ROW
+    # ------------------------------------------------------
+
+    final_rows.append(
+        best_row
+    )
+
+
+# ==========================================================
+# FINAL DATAFRAME
+# ==========================================================
+
+final_df = pd.DataFrame(
+    final_rows
+)
+
+
+# Remove temporary columns
+final_df = final_df.drop(
+    columns=[
+        "_TVA_CHECK",
+        "_SCORE"
+    ],
+    errors="ignore"
+)
+
+
+# ==========================================================
+# SAVE
+# ==========================================================
+
+final_df.to_excel(
+    output_clean,
+    index=False
+)
+
+
+# ==========================================================
+# REPORT
+# ==========================================================
+
+print()
+print("=" * 60)
+print("FINAL RESULT")
+print("=" * 60)
+
+print(
+    "Original rows:",
+    len(df)
+)
+
+print(
+    "Rows without TVA:",
+    len(no_tva)
+)
+
+print(
+    "Rows with TVA:",
+    len(with_tva)
+)
+
+print(
+    "Final rows:",
+    len(final_df)
+)
+
+print(
+    "Duplicate TVA rows removed:",
+    len(with_tva) - len(final_df)
+)
+
+print()
+print("CLEAN FILE:")
+print(output_clean)
+
+print()
+print("ROWS WITHOUT TVA:")
+print(output_no_tva)
+
+print()
+print("DONE")
