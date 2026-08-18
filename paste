@@ -1,337 +1,143 @@
 import pandas as pd
-import re
+from pathlib import Path
+from datetime import datetime
 
 # ============================================================
-# FILE PATHS
+# SETTINGS
 # ============================================================
 
-input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
+INPUT_FILE = "master_final_table.xlsx"
 
-output_clean = r"C:\Users\Sunlight\Desktop\FINAL_WITHOUT_DUPLICATE_TVA.xlsx"
+OUTPUT_DIR = Path("phone_split_output")
+OUTPUT_DIR.mkdir(exist_ok=True)
 
-output_no_tva = r"C:\Users\Sunlight\Desktop\ROWS_WITHOUT_TVA.xlsx"
-
+PHONE_COLS = ["GSM", "TEL1", "TEL2", "TEL3"]
 
 # ============================================================
-# READ EXCEL
+# READ FILE
 # ============================================================
 
-df = pd.read_excel(
-    input_file,
-    dtype=str
-)
+print("Reading file...")
 
-# Clean column names ONLY
-df.columns = (
-    df.columns
-    .astype(str)
-    .str.strip()
-    .str.upper()
-)
+df = pd.read_excel(INPUT_FILE, dtype=str)
 
-# Handle possible TEL column names
-df = df.rename(columns={
-    "TEL 1": "TEL1",
-    "TEL 2": "TEL2",
-    "TEL 3": "TEL3"
-})
+# Clean column names
+df.columns = df.columns.astype(str).str.strip()
 
-# Make sure expected columns exist
-for col in ["TVA", "GSM", "TEL1", "TEL2", "TEL3"]:
+# Make sure all phone columns exist
+for col in PHONE_COLS:
     if col not in df.columns:
         df[col] = ""
 
-print("=" * 60)
-print("START")
-print("=" * 60)
+# Replace NaN
+df = df.fillna("")
 
-print("Rows before cleaning:", len(df))
-
+print(f"Original rows: {len(df):,}")
 
 # ============================================================
-# TVA NORMALIZATION
-#
-# ONLY TVA is normalized.
-# PHONE COLUMNS ARE NOT TOUCHED.
+# CREATE ONE ROW PER PHONE NUMBER
 # ============================================================
 
-def clean_tva(value):
+new_rows = []
 
-    if pd.isna(value):
-        return ""
+for _, row in df.iterrows():
 
-    value = str(value).strip().upper()
+    # Collect every number from GSM, TEL1, TEL2 and TEL3
+    phones = []
 
-    if value in ["", "NAN", "NONE", "NULL"]:
-        return ""
+    for col in PHONE_COLS:
 
-    # Remove Excel decimal
-    value = re.sub(r"\.0+$", "", value)
+        value = str(row[col]).strip()
 
-    # Remove BE prefix
-    if value.startswith("BE"):
-        value = value[2:]
-
-    # Remove spaces, dots, hyphens, etc.
-    value = re.sub(r"\D", "", value)
-
-    # Belgian enterprise number
-    if len(value) == 9:
-        value = "0" + value
-
-    return value
-
-
-df["_TVA_CHECK"] = df["TVA"].apply(clean_tva)
-
-
-# ============================================================
-# SEPARATE ROWS WITHOUT TVA
-# ============================================================
-
-no_tva = df[
-    df["_TVA_CHECK"] == ""
-].copy()
-
-# Remove temporary column
-no_tva = no_tva.drop(
-    columns=["_TVA_CHECK"],
-    errors="ignore"
-)
-
-# Save
-no_tva.to_excel(
-    output_no_tva,
-    index=False
-)
-
-print("Rows without TVA:", len(no_tva))
-
-
-# ============================================================
-# KEEP ONLY ROWS WITH TVA
-# ============================================================
-
-with_tva = df[
-    df["_TVA_CHECK"] != ""
-].copy()
-
-
-# ============================================================
-# COMPLETENESS SCORE
-#
-# This is ONLY used to decide which duplicate row
-# becomes the base row.
-# ============================================================
-
-important_columns = [
-    "STE",
-    "TVA",
-    "NOM",
-    "ADRESSE",
-    "NUMERO",
-    "COMPLEMENT",
-    "CP",
-    "VILLE",
-    "GSM",
-    "TEL1",
-    "TEL2",
-    "TEL3"
-]
-
-important_columns = [
-    col
-    for col in important_columns
-    if col in with_tva.columns
-]
-
-
-def completeness_score(row):
-
-    score = 0
-
-    for col in important_columns:
-
-        value = row.get(col, "")
-
-        if pd.isna(value):
-            continue
-
-        value = str(value).strip()
-
-        if value.lower() not in [
-            "",
-            "nan",
-            "none",
-            "null"
-        ]:
-            score += 1
-
-    return score
-
-
-with_tva["_SCORE"] = with_tva.apply(
-    completeness_score,
-    axis=1
-)
-
-
-# ============================================================
-# PROCESS EACH TVA
-#
-# TVA IS THE ONLY DUPLICATE KEY
-# ============================================================
-
-final_rows = []
-
-
-for tva, group in with_tva.groupby(
-    "_TVA_CHECK",
-    sort=False
-):
+        if value != "":
+            phones.append(value)
 
     # --------------------------------------------------------
-    # CHOOSE THE MOST COMPLETE ROW
+    # NO PHONE NUMBER
+    # Keep the original row
     # --------------------------------------------------------
 
-    best_index = group["_SCORE"].idxmax()
+    if not phones:
 
-    best_row = group.loc[
-        best_index
-    ].copy()
+        new_row = row.to_dict()
 
+        # Make sure phone columns are empty
+        new_row["GSM"] = ""
+        new_row["TEL1"] = ""
+        new_row["TEL2"] = ""
+        new_row["TEL3"] = ""
 
-    # --------------------------------------------------------
-    # PRESERVE DIFFERENT INFORMATION
-    #
-    # We do NOT clean phone numbers.
-    # We do NOT normalize phone numbers.
-    # We simply preserve the original values.
-    # --------------------------------------------------------
-
-    phone_columns = [
-        "GSM",
-        "TEL1",
-        "TEL2",
-        "TEL3"
-    ]
-
-
-    for col in phone_columns:
-
-        if col not in group.columns:
-            continue
-
-        values = []
-
-        for value in group[col]:
-
-            if pd.isna(value):
-                continue
-
-            value = str(value).strip()
-
-            if value == "":
-                continue
-
-            # Preserve exact original value
-            if value not in values:
-                values.append(value)
-
-
-        # Put all unique original values back
-        if values:
-
-            best_row[col] = " | ".join(values)
-
-
-        else:
-
-            best_row[col] = ""
-
+        new_rows.append(new_row)
 
     # --------------------------------------------------------
-    # ADD FINAL ROW
+    # ONE ROW FOR EACH PHONE
+    # ALL PHONES GO INTO GSM
     # --------------------------------------------------------
 
-    final_rows.append(
-        best_row
-    )
+    else:
 
+        for phone in phones:
+
+            new_row = row.to_dict()
+
+            # Empty all phone columns
+            new_row["GSM"] = ""
+            new_row["TEL1"] = ""
+            new_row["TEL2"] = ""
+            new_row["TEL3"] = ""
+
+            # Put the number in GSM
+            new_row["GSM"] = phone
+
+            new_rows.append(new_row)
 
 # ============================================================
-# CREATE FINAL DATAFRAME
+# CREATE RESULT
 # ============================================================
 
-final_df = pd.DataFrame(
-    final_rows
+result = pd.DataFrame(new_rows)
+
+# Keep original column order
+result = result[df.columns]
+
+# ============================================================
+# SAVE
+# ============================================================
+
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+output_file = OUTPUT_DIR / f"phone_one_per_line_{timestamp}.xlsx"
+
+result.to_excel(output_file, index=False)
+
+# ============================================================
+# STATISTICS
+# ============================================================
+
+original_numbers = (
+    df[PHONE_COLS]
+    .apply(lambda x: x.astype(str).str.strip().ne("").sum())
+    .sum()
 )
 
-
-# ============================================================
-# REMOVE TEMPORARY COLUMNS
-# ============================================================
-
-final_df = final_df.drop(
-    columns=[
-        "_TVA_CHECK",
-        "_SCORE"
-    ],
-    errors="ignore"
+result_numbers = (
+    result["GSM"]
+    .astype(str)
+    .str.strip()
+    .ne("")
+    .sum()
 )
-
-
-# ============================================================
-# SAVE FINAL CLEAN FILE
-# ============================================================
-
-final_df.to_excel(
-    output_clean,
-    index=False
-)
-
-
-# ============================================================
-# FINAL REPORT
-# ============================================================
 
 print()
 print("=" * 60)
-print("FINAL RESULT")
-print("=" * 60)
-
-print(
-    "Original rows:",
-    len(df)
-)
-
-print(
-    "Rows with TVA:",
-    len(with_tva)
-)
-
-print(
-    "Rows without TVA:",
-    len(no_tva)
-)
-
-print(
-    "Final rows with unique TVA:",
-    len(final_df)
-)
-
-print(
-    "Duplicate TVA rows removed:",
-    len(with_tva) - len(final_df)
-)
-
-print()
-print("✅ FILE 1 — CLEAN, NO DUPLICATE TVA:")
-print(output_clean)
-
-print()
-print("✅ FILE 2 — ROWS WITHOUT TVA:")
-print(output_no_tva)
-
-print()
 print("DONE")
+print("=" * 60)
+
+print(f"Original rows       : {len(df):,}")
+print(f"Phone numbers found : {original_numbers:,}")
+print(f"Output rows         : {len(result):,}")
+print(f"Numbers in GSM      : {result_numbers:,}")
+
+print()
+print("Output file:")
+print(output_file)
