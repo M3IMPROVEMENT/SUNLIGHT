@@ -1,346 +1,77 @@
 import pandas as pd
-import re
 from pathlib import Path
 
-# ============================================================
-# 1. PUT YOUR EXCEL FILE PATH HERE
-# ============================================================
+# ==============================
+# 1. YOUR FILE
+# ==============================
 
 input_file = r"C:\Users\YOUR_NAME\Desktop\your_file.xlsx"
 
-# ============================================================
-# 2. READ FILE
-# ============================================================
+# ==============================
+# 2. READ EXCEL
+# ==============================
 
 df = pd.read_excel(input_file, dtype=str)
 
-# Clean column names
-df.columns = df.columns.str.strip().str.upper()
+# ==============================
+# 3. CHECK EVERY CELL
+# ==============================
 
-print("Columns found:")
-print(df.columns.tolist())
-
-# ============================================================
-# 3. REQUIRED COLUMNS
-# ============================================================
-
-required = [
-    "STE", "TVA", "NOM", "ADRESSE",
-    "NUMERO", "COMPLEMENT", "CP", "VILLE",
-    "GSM", "TEL1", "TEL2", "TEL3"
-]
-
-missing = [c for c in required if c not in df.columns]
-
-if missing:
-    raise ValueError(f"Missing columns: {missing}")
-
-# ============================================================
-# 4. FUNCTIONS
-# ============================================================
-
-def clean(x):
-    if pd.isna(x):
-        return ""
-    return str(x).strip()
-
-
-def digits_only(x):
-    return re.sub(r"\D", "", clean(x))
-
-
-# ------------------------------------------------------------
-# PHONE DETECTION
-# ------------------------------------------------------------
-
-def is_phone(x):
-
-    x = clean(x)
-
-    if not x:
-        return False
-
-    d = digits_only(x)
-
-    # Too short / too long
-    if len(d) < 8 or len(d) > 13:
-        return False
-
-    # Belgian indicators
-    if d.startswith(("0032", "32", "04", "02", "03", "09")):
-        return True
-
-    # International format
-    if x.startswith("+"):
-        return True
-
-    # Mostly digits
-    non_digits = re.sub(r"\d", "", x)
-
-    if len(non_digits) <= 4:
-        return True
-
-    return False
-
-
-# ------------------------------------------------------------
-# TVA DETECTION
-# ------------------------------------------------------------
-
-def is_tva(x):
-
-    x = clean(x).upper()
-
-    if not x:
-        return False
-
-    # Remove spaces, dots, hyphens
-    v = re.sub(r"[\s.\-]", "", x)
-
-    # Belgian TVA
-    if re.fullmatch(r"BE\d{10}", v):
-        return True
-
-    # Belgian TVA without BE
-    if re.fullmatch(r"\d{10}", v):
-        return True
-
-    return False
-
-
-# ------------------------------------------------------------
-# POSTAL CODE DETECTION
-# ------------------------------------------------------------
-
-def is_cp(x):
-
-    x = clean(x)
-
-    if not x:
-        return False
-
-    # Belgian CP = 4 digits
-    return bool(re.fullmatch(r"\d{4}", x))
-
-
-# ------------------------------------------------------------
-# ADDRESS DETECTION
-# ------------------------------------------------------------
-
-def is_address(x):
-
-    x = clean(x)
-
-    if not x:
-        return False
-
-    low = x.lower()
-
-    address_words = [
-        "rue",
-        "avenue",
-        "av.",
-        "boulevard",
-        "chaussée",
-        "chaussee",
-        "straat",
-        "laan",
-        "steenweg",
-        "place",
-        "plein",
-        "chemin",
-        "route",
-        "allée",
-        "allee",
-        "square",
-        "impasse",
-        "drève",
-        "dreve",
-        "quartier",
-        "clos",
-        "voie",
-        "quai"
-    ]
-
-    # Address keyword
-    for word in address_words:
-        if re.search(r"\b" + re.escape(word) + r"\b", low):
-            return True
-
-    # Example: Rue Victor Hugo 12
-    if re.search(r"[A-Za-zÀ-ÿ]+\s+\d+", x):
-        return True
-
-    # Example: 12 Rue Victor Hugo
-    if re.search(r"\d+\s+[A-Za-zÀ-ÿ]+", x):
-        return True
-
-    return False
-
-
-# ------------------------------------------------------------
-# NAME / COMPANY DETECTION
-# ------------------------------------------------------------
-
-def is_name(x):
-
-    x = clean(x)
-
-    if not x:
-        return False
-
-    if is_phone(x):
-        return False
-
-    if is_tva(x):
-        return False
-
-    if is_address(x):
-        return False
-
-    letters = re.findall(r"[A-Za-zÀ-ÿ]", x)
-
-    return len(letters) >= 2
-
-
-# ============================================================
-# 5. COLUMN TYPES
-# ============================================================
-
-phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
-
-text_columns = [
-    "STE",
-    "NOM",
-    "ADRESSE",
-    "COMPLEMENT",
-    "VILLE"
-]
-
-# ============================================================
-# 6. CHECK EVERY CELL
-# ============================================================
-
-problems = []
+results = []
 
 for index, row in df.iterrows():
 
-    # Excel row number
-    excel_row = index + 2
+    excel_row = index + 2  # Excel header = row 1
 
-    for column in required:
+    for column in df.columns:
 
-        value = clean(row[column])
+        value = row[column]
 
-        # Ignore empty cells
-        if not value:
+        if pd.isna(value):
             continue
 
-        detected = None
-        suggestion = None
+        value = str(value).strip()
 
-        # ====================================================
-        # PHONE FOUND
-        # ====================================================
+        if value == "":
+            continue
 
-        if is_phone(value):
+        # Remove spaces
+        check = value.replace(" ", "")
 
-            if column not in phone_columns:
+        # ONLY NUMBERS
+        if check.isdigit():
 
-                detected = "PHONE NUMBER"
-                suggestion = "GSM / TEL1 / TEL2 / TEL3"
-
-        # ====================================================
-        # TVA FOUND
-        # ====================================================
-
-        elif is_tva(value):
-
-            if column != "TVA":
-
-                detected = "TVA NUMBER"
-                suggestion = "TVA"
-
-        # ====================================================
-        # CP FOUND
-        # ====================================================
-
-        elif is_cp(value):
-
-            if column not in ["CP", "NUMERO"]:
-
-                detected = "POSTAL CODE"
-                suggestion = "CP"
-
-        # ====================================================
-        # ADDRESS FOUND
-        # ====================================================
-
-        elif is_address(value):
-
-            if column not in ["ADRESSE", "COMPLEMENT"]:
-
-                detected = "ADDRESS"
-                suggestion = "ADRESSE"
-
-        # ====================================================
-        # NAME FOUND
-        # ====================================================
-
-        elif is_name(value):
-
-            # If a name/text is found in strongly numeric columns
-            if column in ["TVA", "CP", "NUMERO"]:
-
-                detected = "TEXT / NAME"
-                suggestion = "NOM / STE / ADRESSE"
-
-        # ====================================================
-        # SAVE PROBLEM
-        # ====================================================
-
-        if detected:
-
-            problems.append({
+            results.append({
                 "Excel_Row": excel_row,
                 "Column": column,
                 "Value": value,
-                "Detected_As": detected,
-                "Suggested_Column": suggestion
+                "Type": "NUMBERS"
             })
 
+        # CONTAINS LETTERS / CHARACTERS
+        elif any(c.isalpha() for c in check):
 
-# ============================================================
-# 7. CREATE REPORT
-# ============================================================
+            results.append({
+                "Excel_Row": excel_row,
+                "Column": column,
+                "Value": value,
+                "Type": "CHARACTERS"
+            })
 
-report = pd.DataFrame(problems)
+# ==============================
+# 4. SAVE REPORT
+# ==============================
+
+report = pd.DataFrame(results)
 
 output_file = Path(input_file).with_name(
-    Path(input_file).stem + "_FULL_TABLE_CHECK.xlsx"
+    Path(input_file).stem + "_CHECK.xlsx"
 )
 
-# ============================================================
-# 8. SAVE
-# ============================================================
+report.to_excel(output_file, index=False)
 
-if len(report) > 0:
-
-    report.to_excel(output_file, index=False)
-
-    print("\n======================================")
-    print("CHECK FINISHED")
-    print("======================================")
-
-    print(f"Problems found: {len(report)}")
-
-    print("\nReport:")
-    print(output_file)
-
-else:
-
-    print("\n======================================")
-    print("CHECK FINISHED")
-    print("======================================")
-
-    print("No suspicious misplaced values were found.")
+print("================================")
+print("CHECK FINISHED")
+print("================================")
+print("Total detected cells:", len(report))
+print("Report:", output_file)
