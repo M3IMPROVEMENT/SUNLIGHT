@@ -1,143 +1,346 @@
 import pandas as pd
+import re
 from pathlib import Path
-from datetime import datetime
 
 # ============================================================
-# SETTINGS
+# 1. PUT YOUR EXCEL FILE PATH HERE
 # ============================================================
 
-INPUT_FILE = "master_final_table.xlsx"
-
-OUTPUT_DIR = Path("phone_split_output")
-OUTPUT_DIR.mkdir(exist_ok=True)
-
-PHONE_COLS = ["GSM", "TEL1", "TEL2", "TEL3"]
+input_file = r"C:\Users\YOUR_NAME\Desktop\your_file.xlsx"
 
 # ============================================================
-# READ FILE
+# 2. READ FILE
 # ============================================================
 
-print("Reading file...")
-
-df = pd.read_excel(INPUT_FILE, dtype=str)
+df = pd.read_excel(input_file, dtype=str)
 
 # Clean column names
-df.columns = df.columns.astype(str).str.strip()
+df.columns = df.columns.str.strip().str.upper()
 
-# Make sure all phone columns exist
-for col in PHONE_COLS:
-    if col not in df.columns:
-        df[col] = ""
-
-# Replace NaN
-df = df.fillna("")
-
-print(f"Original rows: {len(df):,}")
+print("Columns found:")
+print(df.columns.tolist())
 
 # ============================================================
-# CREATE ONE ROW PER PHONE NUMBER
+# 3. REQUIRED COLUMNS
 # ============================================================
 
-new_rows = []
+required = [
+    "STE", "TVA", "NOM", "ADRESSE",
+    "NUMERO", "COMPLEMENT", "CP", "VILLE",
+    "GSM", "TEL1", "TEL2", "TEL3"
+]
 
-for _, row in df.iterrows():
+missing = [c for c in required if c not in df.columns]
 
-    # Collect every number from GSM, TEL1, TEL2 and TEL3
-    phones = []
-
-    for col in PHONE_COLS:
-
-        value = str(row[col]).strip()
-
-        if value != "":
-            phones.append(value)
-
-    # --------------------------------------------------------
-    # NO PHONE NUMBER
-    # Keep the original row
-    # --------------------------------------------------------
-
-    if not phones:
-
-        new_row = row.to_dict()
-
-        # Make sure phone columns are empty
-        new_row["GSM"] = ""
-        new_row["TEL1"] = ""
-        new_row["TEL2"] = ""
-        new_row["TEL3"] = ""
-
-        new_rows.append(new_row)
-
-    # --------------------------------------------------------
-    # ONE ROW FOR EACH PHONE
-    # ALL PHONES GO INTO GSM
-    # --------------------------------------------------------
-
-    else:
-
-        for phone in phones:
-
-            new_row = row.to_dict()
-
-            # Empty all phone columns
-            new_row["GSM"] = ""
-            new_row["TEL1"] = ""
-            new_row["TEL2"] = ""
-            new_row["TEL3"] = ""
-
-            # Put the number in GSM
-            new_row["GSM"] = phone
-
-            new_rows.append(new_row)
+if missing:
+    raise ValueError(f"Missing columns: {missing}")
 
 # ============================================================
-# CREATE RESULT
+# 4. FUNCTIONS
 # ============================================================
 
-result = pd.DataFrame(new_rows)
+def clean(x):
+    if pd.isna(x):
+        return ""
+    return str(x).strip()
 
-# Keep original column order
-result = result[df.columns]
+
+def digits_only(x):
+    return re.sub(r"\D", "", clean(x))
+
+
+# ------------------------------------------------------------
+# PHONE DETECTION
+# ------------------------------------------------------------
+
+def is_phone(x):
+
+    x = clean(x)
+
+    if not x:
+        return False
+
+    d = digits_only(x)
+
+    # Too short / too long
+    if len(d) < 8 or len(d) > 13:
+        return False
+
+    # Belgian indicators
+    if d.startswith(("0032", "32", "04", "02", "03", "09")):
+        return True
+
+    # International format
+    if x.startswith("+"):
+        return True
+
+    # Mostly digits
+    non_digits = re.sub(r"\d", "", x)
+
+    if len(non_digits) <= 4:
+        return True
+
+    return False
+
+
+# ------------------------------------------------------------
+# TVA DETECTION
+# ------------------------------------------------------------
+
+def is_tva(x):
+
+    x = clean(x).upper()
+
+    if not x:
+        return False
+
+    # Remove spaces, dots, hyphens
+    v = re.sub(r"[\s.\-]", "", x)
+
+    # Belgian TVA
+    if re.fullmatch(r"BE\d{10}", v):
+        return True
+
+    # Belgian TVA without BE
+    if re.fullmatch(r"\d{10}", v):
+        return True
+
+    return False
+
+
+# ------------------------------------------------------------
+# POSTAL CODE DETECTION
+# ------------------------------------------------------------
+
+def is_cp(x):
+
+    x = clean(x)
+
+    if not x:
+        return False
+
+    # Belgian CP = 4 digits
+    return bool(re.fullmatch(r"\d{4}", x))
+
+
+# ------------------------------------------------------------
+# ADDRESS DETECTION
+# ------------------------------------------------------------
+
+def is_address(x):
+
+    x = clean(x)
+
+    if not x:
+        return False
+
+    low = x.lower()
+
+    address_words = [
+        "rue",
+        "avenue",
+        "av.",
+        "boulevard",
+        "chaussée",
+        "chaussee",
+        "straat",
+        "laan",
+        "steenweg",
+        "place",
+        "plein",
+        "chemin",
+        "route",
+        "allée",
+        "allee",
+        "square",
+        "impasse",
+        "drève",
+        "dreve",
+        "quartier",
+        "clos",
+        "voie",
+        "quai"
+    ]
+
+    # Address keyword
+    for word in address_words:
+        if re.search(r"\b" + re.escape(word) + r"\b", low):
+            return True
+
+    # Example: Rue Victor Hugo 12
+    if re.search(r"[A-Za-zÀ-ÿ]+\s+\d+", x):
+        return True
+
+    # Example: 12 Rue Victor Hugo
+    if re.search(r"\d+\s+[A-Za-zÀ-ÿ]+", x):
+        return True
+
+    return False
+
+
+# ------------------------------------------------------------
+# NAME / COMPANY DETECTION
+# ------------------------------------------------------------
+
+def is_name(x):
+
+    x = clean(x)
+
+    if not x:
+        return False
+
+    if is_phone(x):
+        return False
+
+    if is_tva(x):
+        return False
+
+    if is_address(x):
+        return False
+
+    letters = re.findall(r"[A-Za-zÀ-ÿ]", x)
+
+    return len(letters) >= 2
+
 
 # ============================================================
-# SAVE
+# 5. COLUMN TYPES
 # ============================================================
 
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
 
-output_file = OUTPUT_DIR / f"phone_one_per_line_{timestamp}.xlsx"
-
-result.to_excel(output_file, index=False)
+text_columns = [
+    "STE",
+    "NOM",
+    "ADRESSE",
+    "COMPLEMENT",
+    "VILLE"
+]
 
 # ============================================================
-# STATISTICS
+# 6. CHECK EVERY CELL
 # ============================================================
 
-original_numbers = (
-    df[PHONE_COLS]
-    .apply(lambda x: x.astype(str).str.strip().ne("").sum())
-    .sum()
+problems = []
+
+for index, row in df.iterrows():
+
+    # Excel row number
+    excel_row = index + 2
+
+    for column in required:
+
+        value = clean(row[column])
+
+        # Ignore empty cells
+        if not value:
+            continue
+
+        detected = None
+        suggestion = None
+
+        # ====================================================
+        # PHONE FOUND
+        # ====================================================
+
+        if is_phone(value):
+
+            if column not in phone_columns:
+
+                detected = "PHONE NUMBER"
+                suggestion = "GSM / TEL1 / TEL2 / TEL3"
+
+        # ====================================================
+        # TVA FOUND
+        # ====================================================
+
+        elif is_tva(value):
+
+            if column != "TVA":
+
+                detected = "TVA NUMBER"
+                suggestion = "TVA"
+
+        # ====================================================
+        # CP FOUND
+        # ====================================================
+
+        elif is_cp(value):
+
+            if column not in ["CP", "NUMERO"]:
+
+                detected = "POSTAL CODE"
+                suggestion = "CP"
+
+        # ====================================================
+        # ADDRESS FOUND
+        # ====================================================
+
+        elif is_address(value):
+
+            if column not in ["ADRESSE", "COMPLEMENT"]:
+
+                detected = "ADDRESS"
+                suggestion = "ADRESSE"
+
+        # ====================================================
+        # NAME FOUND
+        # ====================================================
+
+        elif is_name(value):
+
+            # If a name/text is found in strongly numeric columns
+            if column in ["TVA", "CP", "NUMERO"]:
+
+                detected = "TEXT / NAME"
+                suggestion = "NOM / STE / ADRESSE"
+
+        # ====================================================
+        # SAVE PROBLEM
+        # ====================================================
+
+        if detected:
+
+            problems.append({
+                "Excel_Row": excel_row,
+                "Column": column,
+                "Value": value,
+                "Detected_As": detected,
+                "Suggested_Column": suggestion
+            })
+
+
+# ============================================================
+# 7. CREATE REPORT
+# ============================================================
+
+report = pd.DataFrame(problems)
+
+output_file = Path(input_file).with_name(
+    Path(input_file).stem + "_FULL_TABLE_CHECK.xlsx"
 )
 
-result_numbers = (
-    result["GSM"]
-    .astype(str)
-    .str.strip()
-    .ne("")
-    .sum()
-)
+# ============================================================
+# 8. SAVE
+# ============================================================
 
-print()
-print("=" * 60)
-print("DONE")
-print("=" * 60)
+if len(report) > 0:
 
-print(f"Original rows       : {len(df):,}")
-print(f"Phone numbers found : {original_numbers:,}")
-print(f"Output rows         : {len(result):,}")
-print(f"Numbers in GSM      : {result_numbers:,}")
+    report.to_excel(output_file, index=False)
 
-print()
-print("Output file:")
-print(output_file)
+    print("\n======================================")
+    print("CHECK FINISHED")
+    print("======================================")
+
+    print(f"Problems found: {len(report)}")
+
+    print("\nReport:")
+    print(output_file)
+
+else:
+
+    print("\n======================================")
+    print("CHECK FINISHED")
+    print("======================================")
+
+    print("No suspicious misplaced values were found.")
