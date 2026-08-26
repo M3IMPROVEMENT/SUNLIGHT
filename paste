@@ -1,1 +1,26 @@
-https://local.infobel.be/1/sante_action_sociale/index_1.htm
+Hello,
+
+I am currently working on a data collection application for a Belgian B2B call center.
+
+I would like to test a small application that collects publicly available business information from your Belgian directory, particularly company information such as company name, address, postal code, city, telephone numbers and mobile/GSM numbers.
+
+Before doing anything, I would like to know whether automated data extraction from your website is permitted for a limited test.
+
+If direct scraping is not allowed, could you please let me know if you offer an API, test account, sandbox, or another authorized method that I could use for this purpose?
+
+For the test, I would initially like to work with a small sample of data, for example the "Santé / Action sociale" sector, and organize the results by Belgian postal code.
+
+Could you also provide information about:
+
+- API availability and access requirements
+- Whether mobile/GSM numbers are available
+- Available company fields
+- Request or volume limits
+- Pricing for testing and/or commercial use
+- Licensing conditions for B2B/telemarketing purposes
+
+I am mainly looking to test the technical feasibility first before considering a larger-scale solution.
+
+Thank you for your help.
+
+Best regards
