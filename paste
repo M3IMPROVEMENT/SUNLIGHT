@@ -1,26 +1,97 @@
-Hello,
+import pandas as pd
+import re
 
-I am currently working on a data collection application for a Belgian B2B call center.
+# ==========================
+# FILES
+# ==========================
+input_file = "master_final_table.xlsx"
+output_file = "phone_classified.xlsx"
 
-I would like to test a small application that collects publicly available business information from your Belgian directory, particularly company information such as company name, address, postal code, city, telephone numbers and mobile/GSM numbers.
+# ==========================
+# READ FILE
+# ==========================
+df = pd.read_excel(input_file, dtype=str)
 
-Before doing anything, I would like to know whether automated data extraction from your website is permitted for a limited test.
+# ==========================
+# CLEAN NUMBER
+# ==========================
+def clean_number(value):
 
-If direct scraping is not allowed, could you please let me know if you offer an API, test account, sandbox, or another authorized method that I could use for this purpose?
+    if pd.isna(value):
+        return ""
 
-For the test, I would initially like to work with a small sample of data, for example the "Santé / Action sociale" sector, and organize the results by Belgian postal code.
+    value = str(value).strip()
 
-Could you also provide information about:
+    if value == "":
+        return ""
 
-- API availability and access requirements
-- Whether mobile/GSM numbers are available
-- Available company fields
-- Request or volume limits
-- Pricing for testing and/or commercial use
-- Licensing conditions for B2B/telemarketing purposes
+    # Keep digits only
+    number = re.sub(r"\D", "", value)
 
-I am mainly looking to test the technical feasibility first before considering a larger-scale solution.
+    # Remove 0032 from beginning
+    if number.startswith("0032"):
+        number = number[4:]
 
-Thank you for your help.
+    # Remove 32 from beginning
+    elif number.startswith("32"):
+        number = number[2:]
 
-Best regards
+    # Remove 0 from beginning
+    if number.startswith("0"):
+        number = number[1:]
+
+    return number
+
+
+# ==========================
+# CLASSIFY NUMBER
+# ==========================
+def classify_number(value):
+
+    number = clean_number(value)
+
+    if number == "":
+        return "", ""
+
+    length = len(number)
+
+    if length == 9:
+        return number, "GSM"
+
+    elif length == 8:
+        return number, "Fixe"
+
+    else:
+        return number, "CHECK"
+
+
+# ==========================
+# PROCESS GSM COLUMN
+# ==========================
+if "GSM" not in df.columns:
+    raise ValueError("Column 'GSM' was not found.")
+
+df[["GSM_CLEAN", "GSM_TYPE"]] = df["GSM"].apply(
+    lambda x: pd.Series(classify_number(x))
+)
+
+# ==========================
+# SEPARATE WRONG NUMBERS
+# ==========================
+df["GSM_WRONG"] = df.apply(
+    lambda row: row["GSM_CLEAN"]
+    if row["GSM_TYPE"] == "CHECK"
+    else "",
+    axis=1
+)
+
+# ==========================
+# SAVE
+# ==========================
+df.to_excel(output_file, index=False)
+
+print("DONE")
+print(f"Output file: {output_file}")
+
+print("\nClassification:")
+print(df["GSM_TYPE"].value_counts())
