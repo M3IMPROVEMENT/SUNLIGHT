@@ -1,79 +1,35 @@
-import pandas as pd
 from pathlib import Path
+from collections import Counter
 
-# =========================
-# SETTINGS
-# =========================
-folder = Path(r"C:\Users\YOUR_NAME\Desktop\MY_FILES")
-output_folder = folder / "MERGED_OUTPUT"
-output_folder.mkdir(exist_ok=True)
+# CHANGE THIS PATH
+folder = Path(r"C:\Users\YOUR_NAME\Desktop\YOUR_REPOSITORY")
 
-rows_per_file = 800_000   # keep each output manageable
+# Search recursively for all Excel files
+excel_files = []
 
-# =========================
-# MERGE
-# =========================
-excel_files = list(folder.glob("*.xlsx"))
+extensions = ["*.xlsx", "*.xls", "*.xlsm", "*.XLSX", "*.XLS", "*.XLSM"]
 
-print(f"Found {len(excel_files)} Excel files")
+for ext in extensions:
+    excel_files.extend(folder.rglob(ext))
 
-output_number = 1
-current_rows = []
-current_count = 0
+# Remove temporary Excel files
+excel_files = [
+    f for f in excel_files
+    if not f.name.startswith("~$")
+]
 
-for i, file in enumerate(excel_files, start=1):
+print("TOTAL EXCEL FILES FOUND:", len(excel_files))
 
-    print(f"[{i}/{len(excel_files)}] Reading: {file.name}")
+# Count extensions
+extension_count = Counter(f.suffix.lower() for f in excel_files)
 
-    try:
-        df = pd.read_excel(file, dtype=str)
+print("\nFILES BY EXTENSION:")
+for ext, count in extension_count.items():
+    print(ext, ":", count)
 
-        current_rows.append(df)
-        current_count += len(df)
+# Save the complete list
+with open(folder / "all_excel_files_found.txt", "w", encoding="utf-8") as f:
+    for file in sorted(excel_files):
+        f.write(str(file) + "\n")
 
-        # Save once we reach approximately 800,000 rows
-        if current_count >= rows_per_file:
-
-            merged = pd.concat(current_rows, ignore_index=True)
-
-            while len(merged) >= rows_per_file:
-
-                part = merged.iloc[:rows_per_file]
-
-                output_file = output_folder / f"merged_part_{output_number}.csv"
-
-                part.to_csv(
-                    output_file,
-                    index=False,
-                    encoding="utf-8-sig"
-                )
-
-                print(f"Saved: {output_file.name}")
-
-                output_number += 1
-                merged = merged.iloc[rows_per_file:]
-
-            current_rows = [merged] if len(merged) > 0 else []
-            current_count = len(merged)
-
-    except Exception as e:
-        print(f"ERROR in {file.name}: {e}")
-
-# =========================
-# SAVE REMAINING ROWS
-# =========================
-if current_rows:
-
-    merged = pd.concat(current_rows, ignore_index=True)
-
-    output_file = output_folder / f"merged_part_{output_number}.csv"
-
-    merged.to_csv(
-        output_file,
-        index=False,
-        encoding="utf-8-sig"
-    )
-
-    print(f"Saved: {output_file.name}")
-
-print("DONE")
+print("\nList saved as: all_excel_files_found.txt")
