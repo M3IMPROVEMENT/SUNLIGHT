@@ -1,35 +1,196 @@
-from pathlib import Path
-from collections import Counter
+```python
+import pandas as pd
+import re
 
-# CHANGE THIS PATH
-folder = Path(r"C:\Users\YOUR_NAME\Desktop\YOUR_REPOSITORY")
+# ============================================================
+# 1. PUT YOUR FILE PATH HERE
+# ============================================================
+input_file = r"YOUR_FILE.xlsx"
 
-# Search recursively for all Excel files
-excel_files = []
+# ============================================================
+# 2. READ FILE
+# ============================================================
+df = pd.read_excel(input_file, dtype=str)
 
-extensions = ["*.xlsx", "*.xls", "*.xlsm", "*.XLSX", "*.XLS", "*.XLSM"]
+# ============================================================
+# 3. CLEAN COLUMN NAMES
+# ============================================================
+df.columns = (
+    df.columns
+    .astype(str)
+    .str.strip()
+    .str.upper()
+)
 
-for ext in extensions:
-    excel_files.extend(folder.rglob(ext))
-
-# Remove temporary Excel files
-excel_files = [
-    f for f in excel_files
-    if not f.name.startswith("~$")
+# ============================================================
+# 4. REQUIRED COLUMNS
+# ============================================================
+required_columns = [
+    "STE",
+    "TVA",
+    "NOM",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE",
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3"
 ]
 
-print("TOTAL EXCEL FILES FOUND:", len(excel_files))
+# Check missing columns
+missing = [c for c in required_columns if c not in df.columns]
 
-# Count extensions
-extension_count = Counter(f.suffix.lower() for f in excel_files)
+if missing:
+    print("WARNING - Missing columns:")
+    print(missing)
 
-print("\nFILES BY EXTENSION:")
-for ext, count in extension_count.items():
-    print(ext, ":", count)
+    for c in missing:
+        df[c] = ""
 
-# Save the complete list
-with open(folder / "all_excel_files_found.txt", "w", encoding="utf-8") as f:
-    for file in sorted(excel_files):
-        f.write(str(file) + "\n")
 
-print("\nList saved as: all_excel_files_found.txt")
+# ============================================================
+# 5. PREPARE VALUES FOR CHECKING
+# ============================================================
+for col in required_columns:
+    df[col] = df[col].fillna("").astype(str).str.strip()
+
+
+# ============================================================
+# 6. FUNCTION: NUMBERS ONLY
+# ============================================================
+def numbers_only(value):
+    value = str(value).strip()
+
+    # Empty is allowed
+    if value == "":
+        return True
+
+    return bool(re.fullmatch(r"\d+", value))
+
+
+# ============================================================
+# 7. FUNCTION: LETTERS OR LETTERS + NUMBERS
+# STE / ADRESSE
+# ============================================================
+def contains_letter(value):
+    value = str(value).strip()
+
+    # Empty is allowed
+    if value == "":
+        return True
+
+    # Must contain at least one letter
+    return bool(re.search(r"[A-Za-zÀ-ÿ]", value))
+
+
+# ============================================================
+# 8. CHECK CP / GSM / TEL1 / TEL2 / TEL3 / TVA
+# ============================================================
+number_columns = [
+    "CP",
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3",
+    "TVA"
+]
+
+number_problem = pd.Series(False, index=df.index)
+
+for col in number_columns:
+
+    invalid = ~df[col].apply(numbers_only)
+
+    number_problem = number_problem | invalid
+
+
+# ============================================================
+# 9. CHECK STE
+# Must contain at least one letter
+# Examples:
+# ABC       -> VALID
+# ABC123    -> VALID
+# 123ABC    -> VALID
+# 123       -> INVALID
+# !!!       -> INVALID
+# ============================================================
+ste_problem = ~df["STE"].apply(contains_letter)
+
+
+# ============================================================
+# 10. CHECK ADRESSE
+# Must contain at least one letter
+# Examples:
+# Rue Victor Hugo 12 -> VALID
+# Avenue 123         -> VALID
+# 12345              -> INVALID
+# !!!                -> INVALID
+# ============================================================
+adresse_problem = ~df["ADRESSE"].apply(contains_letter)
+
+
+# ============================================================
+# 11. COMBINE ALL PROBLEMS
+# ============================================================
+problem_mask = (
+    number_problem |
+    ste_problem |
+    adresse_problem
+)
+
+
+# ============================================================
+# 12. CREATE TWO FILES
+# ============================================================
+
+# Rows with NO problem
+clean_file = df[~problem_mask].copy()
+
+# Rows with AT LEAST ONE problem
+x_file = df[problem_mask].copy()
+
+
+# ============================================================
+# 13. SAVE
+# ============================================================
+clean_file.to_excel(
+    "CLEAN_FILE.xlsx",
+    index=False
+)
+
+x_file.to_excel(
+    "X_FILE.xlsx",
+    index=False
+)
+
+
+# ============================================================
+# 14. RESULTS
+# ============================================================
+print("\n======================================")
+print("CHECK FINISHED")
+print("======================================")
+
+print("Original rows :", len(df))
+print("Clean rows    :", len(clean_file))
+print("X file rows   :", len(x_file))
+
+print("\nCreated:")
+print("CLEAN_FILE.xlsx")
+print("X_FILE.xlsx")
+
+print("\nX_FILE contains rows where:")
+print("- CP is not numbers only")
+print("- GSM is not numbers only")
+print("- TEL1 is not numbers only")
+print("- TEL2 is not numbers only")
+print("- TEL3 is not numbers only")
+print("- TVA is not numbers only")
+print("- STE does not contain a letter")
+print("- ADRESSE does not contain a letter")
+
+print("\nDONE!")
+```
