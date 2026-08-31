@@ -1,97 +1,79 @@
 import pandas as pd
-import re
+from pathlib import Path
 
-# ==========================
-# FILES
-# ==========================
-input_file = "master_final_table.xlsx"
-output_file = "phone_classified.xlsx"
+# =========================
+# SETTINGS
+# =========================
+folder = Path(r"C:\Users\YOUR_NAME\Desktop\MY_FILES")
+output_folder = folder / "MERGED_OUTPUT"
+output_folder.mkdir(exist_ok=True)
 
-# ==========================
-# READ FILE
-# ==========================
-df = pd.read_excel(input_file, dtype=str)
+rows_per_file = 800_000   # keep each output manageable
 
-# ==========================
-# CLEAN NUMBER
-# ==========================
-def clean_number(value):
+# =========================
+# MERGE
+# =========================
+excel_files = list(folder.glob("*.xlsx"))
 
-    if pd.isna(value):
-        return ""
+print(f"Found {len(excel_files)} Excel files")
 
-    value = str(value).strip()
+output_number = 1
+current_rows = []
+current_count = 0
 
-    if value == "":
-        return ""
+for i, file in enumerate(excel_files, start=1):
 
-    # Keep digits only
-    number = re.sub(r"\D", "", value)
+    print(f"[{i}/{len(excel_files)}] Reading: {file.name}")
 
-    # Remove 0032 from beginning
-    if number.startswith("0032"):
-        number = number[4:]
+    try:
+        df = pd.read_excel(file, dtype=str)
 
-    # Remove 32 from beginning
-    elif number.startswith("32"):
-        number = number[2:]
+        current_rows.append(df)
+        current_count += len(df)
 
-    # Remove 0 from beginning
-    if number.startswith("0"):
-        number = number[1:]
+        # Save once we reach approximately 800,000 rows
+        if current_count >= rows_per_file:
 
-    return number
+            merged = pd.concat(current_rows, ignore_index=True)
 
+            while len(merged) >= rows_per_file:
 
-# ==========================
-# CLASSIFY NUMBER
-# ==========================
-def classify_number(value):
+                part = merged.iloc[:rows_per_file]
 
-    number = clean_number(value)
+                output_file = output_folder / f"merged_part_{output_number}.csv"
 
-    if number == "":
-        return "", ""
+                part.to_csv(
+                    output_file,
+                    index=False,
+                    encoding="utf-8-sig"
+                )
 
-    length = len(number)
+                print(f"Saved: {output_file.name}")
 
-    if length == 9:
-        return number, "GSM"
+                output_number += 1
+                merged = merged.iloc[rows_per_file:]
 
-    elif length == 8:
-        return number, "Fixe"
+            current_rows = [merged] if len(merged) > 0 else []
+            current_count = len(merged)
 
-    else:
-        return number, "CHECK"
+    except Exception as e:
+        print(f"ERROR in {file.name}: {e}")
 
+# =========================
+# SAVE REMAINING ROWS
+# =========================
+if current_rows:
 
-# ==========================
-# PROCESS GSM COLUMN
-# ==========================
-if "GSM" not in df.columns:
-    raise ValueError("Column 'GSM' was not found.")
+    merged = pd.concat(current_rows, ignore_index=True)
 
-df[["GSM_CLEAN", "GSM_TYPE"]] = df["GSM"].apply(
-    lambda x: pd.Series(classify_number(x))
-)
+    output_file = output_folder / f"merged_part_{output_number}.csv"
 
-# ==========================
-# SEPARATE WRONG NUMBERS
-# ==========================
-df["GSM_WRONG"] = df.apply(
-    lambda row: row["GSM_CLEAN"]
-    if row["GSM_TYPE"] == "CHECK"
-    else "",
-    axis=1
-)
+    merged.to_csv(
+        output_file,
+        index=False,
+        encoding="utf-8-sig"
+    )
 
-# ==========================
-# SAVE
-# ==========================
-df.to_excel(output_file, index=False)
+    print(f"Saved: {output_file.name}")
 
 print("DONE")
-print(f"Output file: {output_file}")
-
-print("\nClassification:")
-print(df["GSM_TYPE"].value_counts())
