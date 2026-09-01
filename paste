@@ -1,2 +1,4 @@
-import sys
-!{sys.executable} -m pip install xlrd
+equirement already satisfied: xlrd in C:\Users\Sunlight\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (2.0.2)
+
+[notice] A new release of pip is available: 26.1.2 -> 26.2.1
+[notice] To update, run: C:\Users\Sunlight\AppData\Local\Python\pythoncore-3.14-64\python.exe -m pip install --upgrade pip
