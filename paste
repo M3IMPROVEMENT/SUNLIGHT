@@ -1,391 +1,48 @@
-```python
-import pandas as pd
-import re
-
-# ============================================================
-# 1. PUT YOUR EXCEL FILE PATH HERE
-# ============================================================
-
-input_file = r"YOUR_FILE.xlsx"
-
-
-# ============================================================
-# 2. READ THE EXCEL FILE
-# ============================================================
-
-df = pd.read_excel(input_file, dtype=str)
-
-print("================================================")
-print("FILE CHECK")
-print("================================================")
-
-print("Original rows:", len(df))
-print("Original columns:")
-print(df.columns.tolist())
-
-
-# ============================================================
-# 3. CLEAN COLUMN NAMES
-# ============================================================
-
-df.columns = (
-    df.columns
-    .astype(str)
-    .str.strip()
-    .str.upper()
-)
-
-
-# ============================================================
-# 4. THE 12 COLUMNS
-# ============================================================
-
-required_columns = [
-    "STE",
-    "TVA",
-    "NOM",
-    "ADRESSE",
-    "NUMERO",
-    "COMPLEMENT",
-    "CP",
-    "VILLE",
-    "GSM",
-    "TEL1",
-    "TEL2",
-    "TEL3"
-]
-
-
-# ============================================================
-# 5. CHECK IF ANY COLUMN IS MISSING
-# ============================================================
-
-missing_columns = [
-    col for col in required_columns
-    if col not in df.columns
-]
-
-if missing_columns:
-
-    print("\nWARNING!")
-    print("These columns are missing:")
-    print(missing_columns)
-
-    # Create missing columns so the program can continue
-    for col in missing_columns:
-        df[col] = ""
-
-
-# ============================================================
-# 6. CONVERT ALL 12 COLUMNS TO TEXT
-# ============================================================
-
-for col in required_columns:
-
-    df[col] = (
-        df[col]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-    )
-
-
-# ============================================================
-# 7. REMOVE EXCEL .0 FROM CP
-#
-# Example:
-# 4000.0 -> 4000
-# 1000.0 -> 1000
-#
-# This is only for CP.
-# Phone numbers are NOT modified.
-# ============================================================
-
-df["CP"] = df["CP"].str.replace(
-    r"\.0$",
-    "",
-    regex=True
-)
-
-
-# ============================================================
-# 8. FUNCTION: NUMBERS ONLY
-#
-# Used for:
-# TVA
-# GSM
-# TEL1
-# TEL2
-# TEL3
-#
-# Empty is allowed.
-# ============================================================
-
-def numbers_only(value):
-
-    value = str(value).strip()
-
-    # Empty = allowed
-    if value == "":
-        return True
-
-    # Must contain digits ONLY
-    return bool(
-        re.fullmatch(r"\d+", value)
-    )
-
-
-# ============================================================
-# 9. FUNCTION: STE
-#
-# STE can be:
-#
-# 12345       -> VALID
-# ABC         -> VALID
-# ABC123      -> VALID
-# 123 ABC     -> VALID
-#
-# Empty is allowed.
-#
-# Special characters are NOT allowed.
-# ============================================================
-
-def ste_valid(value):
-
-    value = str(value).strip()
-
-    if value == "":
-        return True
-
-    return bool(
-        re.fullmatch(
-            r"[A-Za-zÀ-ÿ0-9\s]+",
-            value
-        )
-    )
-
-
-# ============================================================
-# 10. FUNCTION: ADRESSE
-#
-# Examples:
-#
-# Rue Hassan II 12       -> VALID
-# 123 Rue Victor Hugo    -> VALID
-# Avenue 5               -> VALID
-# ABC123                 -> VALID
-#
-# Empty is allowed.
-#
-# Special characters are NOT allowed.
-# ============================================================
-
-def adresse_valid(value):
-
-    value = str(value).strip()
-
-    if value == "":
-        return True
-
-    return bool(
-        re.fullmatch(
-            r"[A-Za-zÀ-ÿ0-9\s]+",
-            value
-        )
-    )
-
-
-# ============================================================
-# 11. CHECK TVA
-# ============================================================
-
-tva_problem = ~df["TVA"].apply(
-    numbers_only
-)
-
-
-# ============================================================
-# 12. CHECK CP
-#
-# CP MUST BE EXACTLY 4 DIGITS
-#
-# Examples:
-#
-# 1000  -> VALID
-# 4000  -> VALID
-# 7500  -> VALID
-#
-# 123   -> INVALID
-# 12345 -> INVALID
-# ABC   -> INVALID
-#
-# Empty is allowed.
-# ============================================================
-
-cp_valid = (
-    df["CP"].eq("") |
-    df["CP"].str.fullmatch(
-        r"\d{4}",
-        na=False
-    )
-)
-
-cp_problem = ~cp_valid
-
-
-# ============================================================
-# 13. CHECK GSM / TEL1 / TEL2 / TEL3
-# ============================================================
-
-phone_columns = [
-    "GSM",
-    "TEL1",
-    "TEL2",
-    "TEL3"
-]
-
-phone_problem = pd.Series(
-    False,
-    index=df.index
-)
-
-for col in phone_columns:
-
-    invalid = ~df[col].apply(
-        numbers_only
-    )
-
-    phone_problem = (
-        phone_problem |
-        invalid
-    )
-
-
-# ============================================================
-# 14. CHECK STE
-# ============================================================
-
-ste_problem = ~df["STE"].apply(
-    ste_valid
-)
-
-
-# ============================================================
-# 15. CHECK ADRESSE
-# ============================================================
-
-adresse_problem = ~df["ADRESSE"].apply(
-    adresse_valid
-)
-
-
-# ============================================================
-# 16. COMBINE ALL CHECKS
-#
-# If ANY ONE of these is wrong,
-# the entire row goes to X_FILE.
-# ============================================================
-
-problem_mask = (
-    tva_problem |
-    cp_problem |
-    phone_problem |
-    ste_problem |
-    adresse_problem
-)
-
-
-# ============================================================
-# 17. CREATE CLEAN FILE
-#
-# Rows with NO problems
-# ============================================================
-
-clean_file = df[
-    ~problem_mask
-].copy()
-
-
-# ============================================================
-# 18. CREATE X FILE
-#
-# Rows with AT LEAST ONE problem
-# ============================================================
-
-x_file = df[
-    problem_mask
-].copy()
-
-
-# ============================================================
-# 19. SAVE CLEAN FILE
-# ============================================================
-
-clean_file.to_excel(
-    "CLEAN_FILE.xlsx",
-    index=False
-)
-
-
-# ============================================================
-# 20. SAVE X FILE
-# ============================================================
-
-x_file.to_excel(
-    "X_FILE.xlsx",
-    index=False
-)
-
-
-# ============================================================
-# 21. FINAL RESULTS
-# ============================================================
-
-print("\n================================================")
-print("CHECK FINISHED")
-print("================================================")
-
-print("Original rows :", len(df))
-print("Clean rows    :", len(clean_file))
-print("X file rows   :", len(x_file))
-
-print("\n------------------------------------------------")
-print("PROBLEMS FOUND")
-print("------------------------------------------------")
-
-print(
-    "Invalid TVA:",
-    tva_problem.sum()
-)
-
-print(
-    "Invalid CP:",
-    cp_problem.sum()
-)
-
-print(
-    "Invalid GSM/TEL:",
-    phone_problem.sum()
-)
-
-print(
-    "Invalid STE:",
-    ste_problem.sum()
-)
-
-print(
-    "Invalid ADRESSE:",
-    adresse_problem.sum()
-)
-
-print("\n------------------------------------------------")
-print("FILES CREATED")
-print("------------------------------------------------")
-
-print("CLEAN_FILE.xlsx")
-print("X_FILE.xlsx")
-
-print("\n================================================")
-print("DONE!")
-print("================================================")
-```
+--------------------------------------------------------------------------
+InvalidIndexError                         Traceback (most recent call last)
+Cell In[1], line 49
+     45 
+     46     all_data.append(df)
+     47 
+     48 # Merge all files
+---> 49 master = pd.concat(all_data, ignore_index=True)
+     50 
+     51 # ==========================
+     52 # CLEAN AND CHECK CP
+
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\reshape\concat.py:466, in concat(objs, axis, join, ignore_index, keys, levels, names, verify_integrity, sort, copy)
+    464 axis = 1 - bm_axis if is_frame else 0
+    465 names = names or getattr(keys, "names", None)
+--> 466 result = _get_result(
+    467     objs,
+    468     is_series,
+    469     bm_axis,
+    470     ignore_index,
+    471     intersect,
+    472     sort,
+    473     keys,
+    474     levels,
+    475     verify_integrity,
+    476     names,
+    477     axis,
+    478 )
+    480 if sort is lib.no_default:
+    481     if orig_axis == 0:
+
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\reshape\concat.py:653, in _get_result(objs, is_series, bm_axis, ignore_index, intersect, sort, keys, levels, verify_integrity, names, axis)
+    651         obj_labels = obj.axes[1 - ax]
+    652         if not new_labels.equals(obj_labels):
+--> 653             indexers[ax] = obj_labels.get_indexer(new_labels)
+    655     mgrs_indexers.append((obj._mgr, indexers))
+    657 new_data = concatenate_managers(
+    658     mgrs_indexers, result_axes, concat_axis=bm_axis, copy=False
+    659 )
+
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\indexes\base.py:3728, in Index.get_indexer(self, target, method, limit, tolerance)
+   3725 self._check_indexing_method(method, limit, tolerance)
+   3727 if not self._index_as_unique:
+-> 3728     raise InvalidIndexError(self._requires_unique_msg)
+   3730 if len(target) == 0:
+   3731     return np.array([], dtype=np.intp)
+
+InvalidIndexError: Reindexing only valid with uniquely valued Index objects
