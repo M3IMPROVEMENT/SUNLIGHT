@@ -1,69 +1,585 @@
----------------------------------------------------------------------------
-ParserError                               Traceback (most recent call last)
-Cell In[1], line 54
-     50 # ============================================================
-     51 # READ FILES
-     52 # ============================================================
-     53 
----> 54 enterprise = read_kbo_csv(ENTERPRISE_FILE)
-     55 denomination = read_kbo_csv(DENOMINATION_FILE)
-     56 address = read_kbo_csv(ADDRESS_FILE)
-     57 contact = read_kbo_csv(CONTACT_FILE)
+import csv
+import sqlite3
+import re
+from pathlib import Path
 
-Cell In[1], line 26, in read_kbo_csv(file)
-     23 def read_kbo_csv(file):
-     24     print(f"Reading: {file.name}")
-     25 
----> 26     df = pd.read_csv(
-     27         file,
-     28         sep=",",
-     29         quotechar='"',
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\io\parsers\readers.py:873, in read_csv(filepath_or_buffer, sep, delimiter, header, names, index_col, usecols, dtype, engine, converters, true_values, false_values, skipinitialspace, skiprows, skipfooter, nrows, na_values, keep_default_na, na_filter, skip_blank_lines, parse_dates, date_format, dayfirst, cache_dates, iterator, chunksize, compression, thousands, decimal, lineterminator, quotechar, quoting, doublequote, escapechar, comment, encoding, encoding_errors, dialect, on_bad_lines, low_memory, memory_map, float_precision, storage_options, dtype_backend)
-    861 kwds_defaults = _refine_defaults_read(
-    862     dialect,
-    863     delimiter,
-   (...)    869     dtype_backend=dtype_backend,
-    870 )
-    871 kwds.update(kwds_defaults)
---> 873 return _read(filepath_or_buffer, kwds)
+# ============================================================
+# 1. FOLDER
+# ============================================================
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\io\parsers\readers.py:306, in _read(filepath_or_buffer, kwds)
-    303     return parser
-    305 with parser:
---> 306     return parser.read(nrows)
+FOLDER = Path(
+    r"C:\Users\Sunlight\Downloads\KboOpenData_0472_2026_09_04_Full"
+)
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\io\parsers\readers.py:1947, in TextFileReader.read(self, nrows)
-   1940 nrows = validate_integer("nrows", nrows)
-   1941 try:
-   1942     # error: "ParserBase" has no attribute "read"
-   1943     (
-   1944         index,
-   1945         columns,
-   1946         col_dict,
--> 1947     ) = self._engine.read(  # type: ignore[attr-defined]
-   1948         nrows
-   1949     )
-   1950 except Exception:
-   1951     self.close()
+ENTERPRISE_FILE = FOLDER / "enterprise.csv"
+DENOMINATION_FILE = FOLDER / "denomination.csv"
+ADDRESS_FILE = FOLDER / "address.csv"
+CONTACT_FILE = FOLDER / "contact.csv"
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\io\parsers\c_parser_wrapper.py:219, in CParserWrapper.read(self, nrows)
-    217         data = _concatenate_chunks(chunks, self.names)
-    218     else:
---> 219         data = self._reader.read(nrows)
-    220 except StopIteration:
-    221     if self._first_chunk:
+DB_FILE = FOLDER / "kbo_temp.db"
+OUTPUT_FILE = FOLDER / "KBO_FINAL_COMPANIES.csv"
 
-File pandas/_libs/parsers.pyx:814, in pandas._libs.parsers.TextReader.read()
---> 814 'Could not get source, probably due dynamically evaluated source code.'
 
-File pandas/_libs/parsers.pyx:906, in pandas._libs.parsers.TextReader._read_rows()
---> 906 'Could not get source, probably due dynamically evaluated source code.'
+# ============================================================
+# 2. HELPER
+# ============================================================
 
-File pandas/_libs/parsers.pyx:885, in pandas._libs.parsers.TextReader._check_tokenize_status()
---> 885 'Could not get source, probably due dynamically evaluated source code.'
+def normalize_kbo(value):
+    """
+    0200.065.765 -> 0200065765
+    0200065765   -> 0200065765
+    """
 
-File pandas/_libs/parsers.pyx:2084, in pandas._libs.parsers.raise_parser_error()
--> 2084 'Could not get source, probably due dynamically evaluated source code.'
+    if not value:
+        return ""
 
-ParserError: Error tokenizing data. C error: out of memory
+    return re.sub(r"\D", "", str(value))
+
+
+def clean_text(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def read_csv_rows(filename):
+    """
+    Read CSV progressively.
+    Only one row at a time is kept in memory.
+    """
+
+    # utf-8-sig handles UTF-8 files with BOM
+    with open(
+        filename,
+        "r",
+        encoding="utf-8-sig",
+        newline="",
+        errors="replace"
+    ) as f:
+
+        reader = csv.DictReader(
+            f,
+            delimiter=",",
+            quotechar='"'
+        )
+
+        for row in reader:
+            yield row
+
+
+# ============================================================
+# 3. CHECK FILES
+# ============================================================
+
+for file in [
+    ENTERPRISE_FILE,
+    DENOMINATION_FILE,
+    ADDRESS_FILE,
+    CONTACT_FILE
+]:
+
+    if not file.exists():
+        raise FileNotFoundError(
+            f"File not found:\n{file}"
+        )
+
+print("All required files found.")
+print()
+
+
+# ============================================================
+# 4. CREATE SQLITE DATABASE
+# ============================================================
+
+if DB_FILE.exists():
+    DB_FILE.unlink()
+
+conn = sqlite3.connect(DB_FILE)
+
+cur = conn.cursor()
+
+cur.execute("""
+CREATE TABLE enterprise (
+    kbo TEXT PRIMARY KEY
+)
+""")
+
+cur.execute("""
+CREATE TABLE denomination (
+    kbo TEXT PRIMARY KEY,
+    denomination TEXT
+)
+""")
+
+cur.execute("""
+CREATE TABLE address (
+    kbo TEXT PRIMARY KEY,
+    street TEXT,
+    house_number TEXT,
+    box TEXT,
+    postal_code TEXT,
+    municipality TEXT
+)
+""")
+
+cur.execute("""
+CREATE TABLE phone (
+    kbo TEXT,
+    phone TEXT
+)
+""")
+
+
+# ============================================================
+# 5. ENTERPRISE
+# ============================================================
+
+print("Reading ENTERPRISE...")
+
+count = 0
+
+for row in read_csv_rows(ENTERPRISE_FILE):
+
+    kbo = normalize_kbo(
+        row.get("EnterpriseNumber", "")
+    )
+
+    if not kbo:
+        continue
+
+    cur.execute(
+        "INSERT OR IGNORE INTO enterprise (kbo) VALUES (?)",
+        (kbo,)
+    )
+
+    count += 1
+
+    if count % 100000 == 0:
+        conn.commit()
+        print(f"  {count:,} enterprise records processed")
+
+conn.commit()
+
+print(f"Enterprise done: {count:,}")
+print()
+
+
+# ============================================================
+# 6. DENOMINATION
+# ============================================================
+
+print("Reading DENOMINATION...")
+
+count = 0
+
+for row in read_csv_rows(DENOMINATION_FILE):
+
+    kbo = normalize_kbo(
+        row.get("EntityNumber", "")
+    )
+
+    name = clean_text(
+        row.get("Denomination", "")
+    )
+
+    if not kbo or not name:
+        continue
+
+    type_name = clean_text(
+        row.get("TypeOfDenomination", "")
+    )
+
+    # Prefer Type 001
+    if type_name == "001":
+
+        cur.execute("""
+            INSERT INTO denomination
+            (kbo, denomination)
+            VALUES (?, ?)
+            ON CONFLICT(kbo)
+            DO UPDATE SET denomination = excluded.denomination
+        """, (kbo, name))
+
+    else:
+
+        # Only insert if company doesn't already have a name
+        cur.execute("""
+            INSERT OR IGNORE INTO denomination
+            (kbo, denomination)
+            VALUES (?, ?)
+        """, (kbo, name))
+
+    count += 1
+
+    if count % 100000 == 0:
+        conn.commit()
+        print(f"  {count:,} denomination records processed")
+
+conn.commit()
+
+print(f"Denomination done: {count:,}")
+print()
+
+
+# ============================================================
+# 7. ADDRESS
+# ============================================================
+
+print("Reading ADDRESS...")
+
+count = 0
+
+for row in read_csv_rows(ADDRESS_FILE):
+
+    kbo = normalize_kbo(
+        row.get("EntityNumber", "")
+    )
+
+    if not kbo:
+        continue
+
+    # --------------------------------------------------------
+    # The KBO file can contain different language columns.
+    # We prefer French, then Dutch.
+    # --------------------------------------------------------
+
+    street = clean_text(
+        row.get("StreetFR", "")
+    )
+
+    if not street:
+        street = clean_text(
+            row.get("StreetNL", "")
+        )
+
+    municipality = clean_text(
+        row.get("MunicipalityFR", "")
+    )
+
+    if not municipality:
+        municipality = clean_text(
+            row.get("MunicipalityNL", "")
+        )
+
+    postal_code = clean_text(
+        row.get("PostCode", "")
+    )
+
+    if not postal_code:
+        postal_code = clean_text(
+            row.get("PostalCode", "")
+        )
+
+    house_number = clean_text(
+        row.get("HouseNumber", "")
+    )
+
+    box = clean_text(
+        row.get("Box", "")
+    )
+
+    # Keep first address per company
+    cur.execute("""
+        INSERT OR IGNORE INTO address
+        (
+            kbo,
+            street,
+            house_number,
+            box,
+            postal_code,
+            municipality
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        kbo,
+        street,
+        house_number,
+        box,
+        postal_code,
+        municipality
+    ))
+
+    count += 1
+
+    if count % 100000 == 0:
+        conn.commit()
+        print(f"  {count:,} address records processed")
+
+conn.commit()
+
+print(f"Address done: {count:,}")
+print()
+
+
+# ============================================================
+# 8. CONTACT / TELEPHONE
+# ============================================================
+
+print("Reading CONTACT...")
+
+count = 0
+tel_count = 0
+
+for row in read_csv_rows(CONTACT_FILE):
+
+    contact_type = clean_text(
+        row.get("ContactType", "")
+    ).upper()
+
+    # We ONLY want telephone numbers
+    if contact_type != "TEL":
+        continue
+
+    kbo = normalize_kbo(
+        row.get("EntityNumber", "")
+    )
+
+    phone = clean_text(
+        row.get("Value", "")
+    )
+
+    if not kbo or not phone:
+        continue
+
+    cur.execute("""
+        INSERT INTO phone
+        (kbo, phone)
+        VALUES (?, ?)
+    """, (
+        kbo,
+        phone
+    ))
+
+    tel_count += 1
+
+    if tel_count % 100000 == 0:
+        conn.commit()
+        print(
+            f"  {tel_count:,} telephone records processed"
+        )
+
+conn.commit()
+
+print(f"Telephone records: {tel_count:,}")
+print()
+
+
+# ============================================================
+# 9. INDEX PHONE TABLE
+# ============================================================
+
+print("Creating indexes...")
+
+cur.execute("""
+CREATE INDEX idx_phone_kbo
+ON phone(kbo)
+""")
+
+conn.commit()
+
+
+# ============================================================
+# 10. GSM DETECTION
+# ============================================================
+
+def is_gsm(phone):
+
+    if not phone:
+        return False
+
+    # This is ONLY for classification.
+    # The original phone value is preserved.
+
+    x = re.sub(r"[^0-9+]", "", phone)
+
+    # 0032 -> +32
+    if x.startswith("0032"):
+        x = "+" + x[2:]
+
+    # International Belgian GSM
+    # +3246...
+    # +3247...
+    # +3248...
+    # +3249...
+
+    if x.startswith("+324"):
+
+        if len(x) >= 5 and x[4] in "6789":
+            return True
+
+    # Local Belgian GSM
+    # 046...
+    # 047...
+    # 048...
+    # 049...
+
+    if re.match(r"^04[6-9]", x):
+        return True
+
+    return False
+
+
+# ============================================================
+# 11. GENERATE FINAL CSV
+# ============================================================
+
+print("Creating final CSV...")
+
+with open(
+    OUTPUT_FILE,
+    "w",
+    encoding="utf-8-sig",
+    newline=""
+) as f:
+
+    writer = csv.writer(f)
+
+    writer.writerow([
+        "STE",
+        "TVA",
+        "NOM",
+        "ADRESSE",
+        "NUMERO",
+        "COMPLEMENT",
+        "CP",
+        "VILLE",
+        "GSM",
+        "TEL1",
+        "TEL2",
+        "TEL3"
+    ])
+
+    cur.execute("""
+        SELECT
+            e.kbo,
+            d.denomination,
+            a.street,
+            a.house_number,
+            a.box,
+            a.postal_code,
+            a.municipality
+        FROM enterprise e
+        LEFT JOIN denomination d
+            ON e.kbo = d.kbo
+        LEFT JOIN address a
+            ON e.kbo = a.kbo
+        ORDER BY e.kbo
+    """)
+
+    company_count = 0
+
+    for row in cur:
+
+        (
+            kbo,
+            name,
+            street,
+            house_number,
+            box,
+            postal_code,
+            municipality
+        ) = row
+
+        # ----------------------------------------------------
+        # Get telephone numbers for this company
+        # ----------------------------------------------------
+
+        phones = []
+
+        cur2 = conn.cursor()
+
+        cur2.execute("""
+            SELECT phone
+            FROM phone
+            WHERE kbo = ?
+        """, (kbo,))
+
+        for phone_row in cur2:
+
+            phone = phone_row[0]
+
+            if phone and phone not in phones:
+                phones.append(phone)
+
+        # ----------------------------------------------------
+        # Separate GSM and landline
+        # ----------------------------------------------------
+
+        gsm = ""
+        landlines = []
+
+        for phone in phones:
+
+            if is_gsm(phone):
+
+                if not gsm:
+                    gsm = phone
+
+            else:
+
+                if phone not in landlines:
+                    landlines.append(phone)
+
+        tel1 = landlines[0] if len(landlines) > 0 else ""
+        tel2 = landlines[1] if len(landlines) > 1 else ""
+        tel3 = landlines[2] if len(landlines) > 2 else ""
+
+        # ----------------------------------------------------
+        # TVA representation
+        # ----------------------------------------------------
+
+        tva = "BE" + kbo if kbo else ""
+
+        # ----------------------------------------------------
+        # Write row
+        # ----------------------------------------------------
+
+        writer.writerow([
+            kbo,
+            tva,
+            name or "",
+            street or "",
+            house_number or "",
+            box or "",
+            postal_code or "",
+            municipality or "",
+            gsm,
+            tel1,
+            tel2,
+            tel3
+        ])
+
+        company_count += 1
+
+        if company_count % 100000 == 0:
+            print(
+                f"  {company_count:,} companies written"
+            )
+
+
+# ============================================================
+# 12. CLOSE DATABASE
+# ============================================================
+
+conn.close()
+
+
+# ============================================================
+# 13. RESULT
+# ============================================================
+
+print()
+print("=" * 60)
+print("DONE")
+print("=" * 60)
+
+print(f"Companies: {company_count:,}")
+
+print()
+print("Output file:")
+print(OUTPUT_FILE)
+
+print()
+print("Temporary database:")
+print(DB_FILE)
