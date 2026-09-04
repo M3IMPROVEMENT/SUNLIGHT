@@ -1,1 +1,557 @@
-!b3YPFdcYvd3Qz3
+import pandas as pd
+import re
+from pathlib import Path
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+FOLDER = Path(r"C:\YOUR\PATH\KboOpenData_0472_2026_09_04_Full")
+
+ENTERPRISE_FILE = FOLDER / "enterprise.csv"
+DENOMINATION_FILE = FOLDER / "denomination.csv"
+ADDRESS_FILE = FOLDER / "address.csv"
+CONTACT_FILE = FOLDER / "contact.csv"
+
+OUTPUT_FILE = FOLDER / "KBO_FINAL_COMPANIES.csv"
+
+
+# ============================================================
+# FUNCTION: READ KBO CSV
+# ============================================================
+
+def read_kbo_csv(file):
+    print(f"Reading: {file.name}")
+
+    df = pd.read_csv(
+        file,
+        sep=",",
+        quotechar='"',
+        dtype=str,
+        encoding="utf-8",
+        keep_default_na=False,
+        low_memory=False
+    )
+
+    # Remove possible BOM/spaces from column names
+    df.columns = (
+        df.columns
+        .str.replace("\ufeff", "", regex=False)
+        .str.strip()
+    )
+
+    print("Columns:")
+    print(list(df.columns))
+    print()
+
+    return df
+
+
+# ============================================================
+# READ FILES
+# ============================================================
+
+enterprise = read_kbo_csv(ENTERPRISE_FILE)
+denomination = read_kbo_csv(DENOMINATION_FILE)
+address = read_kbo_csv(ADDRESS_FILE)
+contact = read_kbo_csv(CONTACT_FILE)
+
+
+# ============================================================
+# NORMALIZE ENTERPRISE NUMBER
+# ============================================================
+
+def normalize_kbo(x):
+    """
+    Converts:
+        0200.065.765
+        0200065765
+    into:
+        0200065765
+    """
+
+    if pd.isna(x):
+        return ""
+
+    return re.sub(r"\D", "", str(x))
+
+
+for df in [enterprise, denomination, address, contact]:
+    if "EntityNumber" in df.columns:
+        df["KBO_KEY"] = df["EntityNumber"].apply(normalize_kbo)
+
+    elif "EnterpriseNumber" in df.columns:
+        df["KBO_KEY"] = df["EnterpriseNumber"].apply(normalize_kbo)
+
+
+# ============================================================
+# ENTERPRISE
+# ============================================================
+
+enterprise["KBO_KEY"] = enterprise["EnterpriseNumber"].apply(normalize_kbo)
+
+# Keep one enterprise record per KBO number
+enterprise = enterprise.drop_duplicates(
+    subset="KBO_KEY",
+    keep="first"
+)
+
+
+# ============================================================
+# DENOMINATION
+# ============================================================
+
+denomination["KBO_KEY"] = denomination["EntityNumber"].apply(normalize_kbo)
+
+# Prefer TypeOfDenomination 001 when available
+if "TypeOfDenomination" in denomination.columns:
+
+    official = denomination[
+        denomination["TypeOfDenomination"].astype(str).str.strip() == "001"
+    ].copy()
+
+    # If 001 doesn't exist for a company, use any denomination
+    official = official.drop_duplicates(
+        subset="KBO_KEY",
+        keep="first"
+    )
+
+    fallback = denomination.drop_duplicates(
+        subset="KBO_KEY",
+        keep="first"
+    )
+
+    denomination = official[
+        ["KBO_KEY", "Denomination"]
+    ].copy()
+
+    fallback = fallback[
+        ["KBO_KEY", "Denomination"]
+    ].copy()
+
+    denomination = denomination.drop_duplicates("KBO_KEY")
+
+    # Add companies that did not have 001
+    missing = fallback[
+        ~fallback["KBO_KEY"].isin(denomination["KBO_KEY"])
+    ]
+
+    denomination = pd.concat(
+        [denomination, missing],
+        ignore_index=True
+    )
+
+else:
+
+    denomination = denomination[
+        ["KBO_KEY", "Denomination"]
+    ].drop_duplicates("KBO_KEY")
+
+
+# ============================================================
+# ADDRESS
+# ============================================================
+
+address["KBO_KEY"] = address["EntityNumber"].apply(normalize_kbo)
+
+print("ADDRESS COLUMNS:")
+print(list(address.columns))
+print()
+
+
+# ============================================================
+# FIND ADDRESS COLUMNS
+# ============================================================
+
+def find_column(df, possible_names):
+
+    lower = {c.lower(): c for c in df.columns}
+
+    for name in possible_names:
+        if name.lower() in lower:
+            return lower[name.lower()]
+
+    return None
+
+
+zip_col = find_column(
+    address,
+    ["Zipcode", "PostalCode", "ZipCode"]
+)
+
+municipality_col = find_column(
+    address,
+    ["MunicipalityFR", "MunicipalityNL", "Municipality"]
+)
+
+street_col = find_column(
+    address,
+    ["StreetFR", "StreetNL", "Street"]
+)
+
+house_col = find_column(
+    address,
+    ["HouseNumber"]
+)
+
+box_col = find_column(
+    address,
+    ["Box", "Mailbox", "BoxNumber"]
+)
+
+
+print("Detected address columns:")
+print("ZIP       :", zip_col)
+print("MUNICIPAL :", municipality_col)
+print("STREET    :", street_col)
+print("HOUSE     :", house_col)
+print("BOX       :", box_col)
+print()
+
+
+# ============================================================
+# BUILD ADDRESS
+# ============================================================
+
+address2 = pd.DataFrame()
+
+address2["KBO_KEY"] = address["KBO_KEY"]
+
+if street_col:
+    address2["STREET"] = address[street_col].astype(str).str.strip()
+else:
+    address2["STREET"] = ""
+
+if house_col:
+    address2["HOUSE"] = address[house_col].astype(str).str.strip()
+else:
+    address2["HOUSE"] = ""
+
+if box_col:
+    address2["BOX"] = address[box_col].astype(str).str.strip()
+else:
+    address2["BOX"] = ""
+
+if zip_col:
+    address2["CP"] = address[zip_col].astype(str).str.strip()
+else:
+    address2["CP"] = ""
+
+if municipality_col:
+    address2["VILLE"] = address[municipality_col].astype(str).str.strip()
+else:
+    address2["VILLE"] = ""
+
+
+# Create address text
+address2["ADRESSE"] = (
+    address2["STREET"]
+    .replace("nan", "", regex=False)
+    .str.strip()
+)
+
+address2["NUMERO"] = (
+    address2["HOUSE"]
+    .replace("nan", "", regex=False)
+    .str.strip()
+)
+
+address2["COMPLEMENT"] = (
+    address2["BOX"]
+    .replace("nan", "", regex=False)
+    .str.strip()
+)
+
+
+# Remove duplicate addresses
+address2 = address2.drop_duplicates(
+    subset="KBO_KEY",
+    keep="first"
+)
+
+
+# ============================================================
+# CONTACT
+# ============================================================
+
+contact["KBO_KEY"] = contact["EntityNumber"].apply(normalize_kbo)
+
+# Only telephone contacts
+tel = contact[
+    contact["ContactType"]
+    .astype(str)
+    .str.upper()
+    .str.strip()
+    == "TEL"
+].copy()
+
+print("Number of TEL records:", len(tel))
+
+
+# ============================================================
+# PHONE CLASSIFICATION
+# ============================================================
+
+def clean_phone_for_check(phone):
+    """
+    Used ONLY for classification.
+    The original phone number is NOT changed.
+    """
+
+    if pd.isna(phone):
+        return ""
+
+    x = str(phone).strip()
+
+    # Keep digits and +
+    x = re.sub(r"[^\d+]", "", x)
+
+    # 0032 -> +32
+    if x.startswith("0032"):
+        x = "+" + x[2:]
+
+    return x
+
+
+def is_gsm(phone):
+
+    x = clean_phone_for_check(phone)
+
+    # International Belgian mobile:
+    # +3246...
+    # +3247...
+    # +3248...
+    # +3249...
+
+    if x.startswith("+324"):
+        if len(x) >= 5 and x[4] in "6789":
+            return True
+
+    # 00324 after normalization
+    if x.startswith("00324"):
+        if len(x) >= 6 and x[5] in "6789":
+            return True
+
+    # Belgian local mobile:
+    # 046...
+    # 047...
+    # 048...
+    # 049...
+
+    if re.match(r"^04[6-9]", x):
+        return True
+
+    return False
+
+
+tel["IS_GSM"] = tel["Value"].apply(is_gsm)
+
+
+# ============================================================
+# GSM
+# ============================================================
+
+gsm = tel[tel["IS_GSM"]].copy()
+
+gsm_grouped = (
+    gsm.groupby("KBO_KEY")["Value"]
+    .apply(list)
+    .reset_index()
+)
+
+gsm_grouped["GSM"] = gsm_grouped["Value"].apply(
+    lambda x: x[0] if len(x) > 0 else ""
+)
+
+gsm_grouped = gsm_grouped[
+    ["KBO_KEY", "GSM"]
+]
+
+
+# ============================================================
+# LANDLINE TEL1 / TEL2 / TEL3
+# ============================================================
+
+landline = tel[~tel["IS_GSM"]].copy()
+
+landline_grouped = (
+    landline.groupby("KBO_KEY")["Value"]
+    .apply(list)
+    .reset_index()
+)
+
+
+def get_phone(values, position):
+
+    if len(values) > position:
+        return values[position]
+
+    return ""
+
+
+landline_grouped["TEL1"] = landline_grouped["Value"].apply(
+    lambda x: get_phone(x, 0)
+)
+
+landline_grouped["TEL2"] = landline_grouped["Value"].apply(
+    lambda x: get_phone(x, 1)
+)
+
+landline_grouped["TEL3"] = landline_grouped["Value"].apply(
+    lambda x: get_phone(x, 2)
+)
+
+landline_grouped = landline_grouped[
+    ["KBO_KEY", "TEL1", "TEL2", "TEL3"]
+]
+
+
+# ============================================================
+# MERGE EVERYTHING
+# ============================================================
+
+result = enterprise[
+    ["KBO_KEY"]
+].copy()
+
+# Company name
+result = result.merge(
+    denomination,
+    on="KBO_KEY",
+    how="left"
+)
+
+# Address
+result = result.merge(
+    address2[
+        [
+            "KBO_KEY",
+            "ADRESSE",
+            "NUMERO",
+            "COMPLEMENT",
+            "CP",
+            "VILLE"
+        ]
+    ],
+    on="KBO_KEY",
+    how="left"
+)
+
+# GSM
+result = result.merge(
+    gsm_grouped,
+    on="KBO_KEY",
+    how="left"
+)
+
+# Landlines
+result = result.merge(
+    landline_grouped,
+    on="KBO_KEY",
+    how="left"
+)
+
+
+# ============================================================
+# CREATE TVA
+# ============================================================
+
+result["STE"] = result["KBO_KEY"]
+
+result["TVA"] = result["KBO_KEY"].apply(
+    lambda x: "BE" + x if x else ""
+)
+
+
+# ============================================================
+# CLEAN TEXT
+# ============================================================
+
+for col in [
+    "Denomination",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE",
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3"
+]:
+
+    if col in result.columns:
+        result[col] = (
+            result[col]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+
+
+# ============================================================
+# FINAL COLUMN ORDER
+# ============================================================
+
+result = result.rename(
+    columns={
+        "Denomination": "NOM"
+    }
+)
+
+final_columns = [
+    "STE",
+    "TVA",
+    "NOM",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE",
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3"
+]
+
+result = result[final_columns]
+
+
+# ============================================================
+# REMOVE EXACT DUPLICATE COMPANIES
+# ============================================================
+
+result = result.drop_duplicates(
+    subset="STE",
+    keep="first"
+)
+
+
+# ============================================================
+# SAVE
+# ============================================================
+
+result.to_csv(
+    OUTPUT_FILE,
+    index=False,
+    encoding="utf-8-sig"
+)
+
+print()
+print("=" * 60)
+print("DONE")
+print("=" * 60)
+print("Companies:", len(result))
+print("Companies with GSM:", (result["GSM"] != "").sum())
+print("Companies with TEL1:", (result["TEL1"] != "").sum())
+print("Companies with any phone:",
+      (
+          (result["GSM"] != "") |
+          (result["TEL1"] != "") |
+          (result["TEL2"] != "") |
+          (result["TEL3"] != "")
+      ).sum()
+)
+print()
+print("Output:")
+print(OUTPUT_FILE)
