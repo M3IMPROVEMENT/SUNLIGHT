@@ -1,585 +1,118 @@
-import csv
-import sqlite3
-import re
+import pandas as pd
 from pathlib import Path
-
+from datetime import datetime
 
 # ============================================================
-# 1. FOLDER
+# SETTINGS
 # ============================================================
 
-FOLDER = Path(
-    r"C:\Users\Sunlight\Downloads\KboOpenData_0472_2026_09_04_Full"
+input_file = Path(r"C:\YOUR_PATH\master_file.xlsx")
+
+output_dir = input_file.parent / "GSM_DEDUP_SPLIT"
+output_dir.mkdir(exist_ok=True)
+
+# ============================================================
+# READ FILE
+# ============================================================
+
+df = pd.read_excel(input_file, dtype=str)
+
+# Clean column names
+df.columns = df.columns.str.strip()
+
+# Check required columns
+required_columns = ["GSM", "TVA"]
+
+for col in required_columns:
+    if col not in df.columns:
+        raise ValueError(f"Column '{col}' was not found in the file.")
+
+# ============================================================
+# CLEAN GSM
+# ============================================================
+
+df["GSM"] = (
+    df["GSM"]
+    .fillna("")
+    .astype(str)
+    .str.strip()
 )
 
-ENTERPRISE_FILE = FOLDER / "enterprise.csv"
-DENOMINATION_FILE = FOLDER / "denomination.csv"
-ADDRESS_FILE = FOLDER / "address.csv"
-CONTACT_FILE = FOLDER / "contact.csv"
-
-DB_FILE = FOLDER / "kbo_temp.db"
-OUTPUT_FILE = FOLDER / "KBO_FINAL_COMPANIES.csv"
-
+# Remove Excel artifacts such as "0.0"
+df["GSM"] = df["GSM"].str.replace(r"\.0$", "", regex=True)
 
 # ============================================================
-# 2. HELPER
+# REMOVE EMPTY GSM
 # ============================================================
 
-def normalize_kbo(value):
-    """
-    0200.065.765 -> 0200065765
-    0200065765   -> 0200065765
-    """
-
-    if not value:
-        return ""
-
-    return re.sub(r"\D", "", str(value))
-
-
-def clean_text(value):
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def read_csv_rows(filename):
-    """
-    Read CSV progressively.
-    Only one row at a time is kept in memory.
-    """
-
-    # utf-8-sig handles UTF-8 files with BOM
-    with open(
-        filename,
-        "r",
-        encoding="utf-8-sig",
-        newline="",
-        errors="replace"
-    ) as f:
-
-        reader = csv.DictReader(
-            f,
-            delimiter=",",
-            quotechar='"'
-        )
-
-        for row in reader:
-            yield row
-
+df = df[df["GSM"] != ""].copy()
 
 # ============================================================
-# 3. CHECK FILES
+# REMOVE DUPLICATE GSM
 # ============================================================
 
-for file in [
-    ENTERPRISE_FILE,
-    DENOMINATION_FILE,
-    ADDRESS_FILE,
-    CONTACT_FILE
-]:
+before_duplicates = len(df)
 
-    if not file.exists():
-        raise FileNotFoundError(
-            f"File not found:\n{file}"
-        )
+df = df.drop_duplicates(
+    subset=["GSM"],
+    keep="first"
+).copy()
 
-print("All required files found.")
-print()
+after_duplicates = len(df)
 
+duplicates_removed = before_duplicates - after_duplicates
+
+print(f"Rows before GSM deduplication : {before_duplicates:,}")
+print(f"Rows after GSM deduplication  : {after_duplicates:,}")
+print(f"Duplicate GSM removed         : {duplicates_removed:,}")
 
 # ============================================================
-# 4. CREATE SQLITE DATABASE
+# CLEAN TVA
 # ============================================================
 
-if DB_FILE.exists():
-    DB_FILE.unlink()
-
-conn = sqlite3.connect(DB_FILE)
-
-cur = conn.cursor()
-
-cur.execute("""
-CREATE TABLE enterprise (
-    kbo TEXT PRIMARY KEY
+df["TVA"] = (
+    df["TVA"]
+    .fillna("")
+    .astype(str)
+    .str.strip()
 )
-""")
 
-cur.execute("""
-CREATE TABLE denomination (
-    kbo TEXT PRIMARY KEY,
-    denomination TEXT
+# Treat NaN / empty / Excel artifacts as missing
+df["TVA"] = df["TVA"].replace(
+    ["nan", "NaN", "None", "NONE", "0.0"],
+    ""
 )
-""")
-
-cur.execute("""
-CREATE TABLE address (
-    kbo TEXT PRIMARY KEY,
-    street TEXT,
-    house_number TEXT,
-    box TEXT,
-    postal_code TEXT,
-    municipality TEXT
-)
-""")
-
-cur.execute("""
-CREATE TABLE phone (
-    kbo TEXT,
-    phone TEXT
-)
-""")
-
 
 # ============================================================
-# 5. ENTERPRISE
+# SPLIT WITH TVA / WITHOUT TVA
 # ============================================================
 
-print("Reading ENTERPRISE...")
+with_tva = df[df["TVA"] != ""].copy()
 
-count = 0
-
-for row in read_csv_rows(ENTERPRISE_FILE):
-
-    kbo = normalize_kbo(
-        row.get("EnterpriseNumber", "")
-    )
-
-    if not kbo:
-        continue
-
-    cur.execute(
-        "INSERT OR IGNORE INTO enterprise (kbo) VALUES (?)",
-        (kbo,)
-    )
-
-    count += 1
-
-    if count % 100000 == 0:
-        conn.commit()
-        print(f"  {count:,} enterprise records processed")
-
-conn.commit()
-
-print(f"Enterprise done: {count:,}")
-print()
-
+without_tva = df[df["TVA"] == ""].copy()
 
 # ============================================================
-# 6. DENOMINATION
+# OUTPUT FILES
 # ============================================================
 
-print("Reading DENOMINATION...")
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-count = 0
+with_tva_file = output_dir / f"GSM_unique_WITH_TVA_{timestamp}.xlsx"
+without_tva_file = output_dir / f"GSM_unique_WITHOUT_TVA_{timestamp}.xlsx"
 
-for row in read_csv_rows(DENOMINATION_FILE):
-
-    kbo = normalize_kbo(
-        row.get("EntityNumber", "")
-    )
-
-    name = clean_text(
-        row.get("Denomination", "")
-    )
-
-    if not kbo or not name:
-        continue
-
-    type_name = clean_text(
-        row.get("TypeOfDenomination", "")
-    )
-
-    # Prefer Type 001
-    if type_name == "001":
-
-        cur.execute("""
-            INSERT INTO denomination
-            (kbo, denomination)
-            VALUES (?, ?)
-            ON CONFLICT(kbo)
-            DO UPDATE SET denomination = excluded.denomination
-        """, (kbo, name))
-
-    else:
-
-        # Only insert if company doesn't already have a name
-        cur.execute("""
-            INSERT OR IGNORE INTO denomination
-            (kbo, denomination)
-            VALUES (?, ?)
-        """, (kbo, name))
-
-    count += 1
-
-    if count % 100000 == 0:
-        conn.commit()
-        print(f"  {count:,} denomination records processed")
-
-conn.commit()
-
-print(f"Denomination done: {count:,}")
-print()
-
+with_tva.to_excel(with_tva_file, index=False)
+without_tva.to_excel(without_tva_file, index=False)
 
 # ============================================================
-# 7. ADDRESS
+# RESULTS
 # ============================================================
 
-print("Reading ADDRESS...")
-
-count = 0
-
-for row in read_csv_rows(ADDRESS_FILE):
-
-    kbo = normalize_kbo(
-        row.get("EntityNumber", "")
-    )
-
-    if not kbo:
-        continue
-
-    # --------------------------------------------------------
-    # The KBO file can contain different language columns.
-    # We prefer French, then Dutch.
-    # --------------------------------------------------------
-
-    street = clean_text(
-        row.get("StreetFR", "")
-    )
-
-    if not street:
-        street = clean_text(
-            row.get("StreetNL", "")
-        )
-
-    municipality = clean_text(
-        row.get("MunicipalityFR", "")
-    )
-
-    if not municipality:
-        municipality = clean_text(
-            row.get("MunicipalityNL", "")
-        )
-
-    postal_code = clean_text(
-        row.get("PostCode", "")
-    )
-
-    if not postal_code:
-        postal_code = clean_text(
-            row.get("PostalCode", "")
-        )
-
-    house_number = clean_text(
-        row.get("HouseNumber", "")
-    )
-
-    box = clean_text(
-        row.get("Box", "")
-    )
-
-    # Keep first address per company
-    cur.execute("""
-        INSERT OR IGNORE INTO address
-        (
-            kbo,
-            street,
-            house_number,
-            box,
-            postal_code,
-            municipality
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (
-        kbo,
-        street,
-        house_number,
-        box,
-        postal_code,
-        municipality
-    ))
-
-    count += 1
-
-    if count % 100000 == 0:
-        conn.commit()
-        print(f"  {count:,} address records processed")
-
-conn.commit()
-
-print(f"Address done: {count:,}")
-print()
-
-
-# ============================================================
-# 8. CONTACT / TELEPHONE
-# ============================================================
-
-print("Reading CONTACT...")
-
-count = 0
-tel_count = 0
-
-for row in read_csv_rows(CONTACT_FILE):
-
-    contact_type = clean_text(
-        row.get("ContactType", "")
-    ).upper()
-
-    # We ONLY want telephone numbers
-    if contact_type != "TEL":
-        continue
-
-    kbo = normalize_kbo(
-        row.get("EntityNumber", "")
-    )
-
-    phone = clean_text(
-        row.get("Value", "")
-    )
-
-    if not kbo or not phone:
-        continue
-
-    cur.execute("""
-        INSERT INTO phone
-        (kbo, phone)
-        VALUES (?, ?)
-    """, (
-        kbo,
-        phone
-    ))
-
-    tel_count += 1
-
-    if tel_count % 100000 == 0:
-        conn.commit()
-        print(
-            f"  {tel_count:,} telephone records processed"
-        )
-
-conn.commit()
-
-print(f"Telephone records: {tel_count:,}")
-print()
-
-
-# ============================================================
-# 9. INDEX PHONE TABLE
-# ============================================================
-
-print("Creating indexes...")
-
-cur.execute("""
-CREATE INDEX idx_phone_kbo
-ON phone(kbo)
-""")
-
-conn.commit()
-
-
-# ============================================================
-# 10. GSM DETECTION
-# ============================================================
-
-def is_gsm(phone):
-
-    if not phone:
-        return False
-
-    # This is ONLY for classification.
-    # The original phone value is preserved.
-
-    x = re.sub(r"[^0-9+]", "", phone)
-
-    # 0032 -> +32
-    if x.startswith("0032"):
-        x = "+" + x[2:]
-
-    # International Belgian GSM
-    # +3246...
-    # +3247...
-    # +3248...
-    # +3249...
-
-    if x.startswith("+324"):
-
-        if len(x) >= 5 and x[4] in "6789":
-            return True
-
-    # Local Belgian GSM
-    # 046...
-    # 047...
-    # 048...
-    # 049...
-
-    if re.match(r"^04[6-9]", x):
-        return True
-
-    return False
-
-
-# ============================================================
-# 11. GENERATE FINAL CSV
-# ============================================================
-
-print("Creating final CSV...")
-
-with open(
-    OUTPUT_FILE,
-    "w",
-    encoding="utf-8-sig",
-    newline=""
-) as f:
-
-    writer = csv.writer(f)
-
-    writer.writerow([
-        "STE",
-        "TVA",
-        "NOM",
-        "ADRESSE",
-        "NUMERO",
-        "COMPLEMENT",
-        "CP",
-        "VILLE",
-        "GSM",
-        "TEL1",
-        "TEL2",
-        "TEL3"
-    ])
-
-    cur.execute("""
-        SELECT
-            e.kbo,
-            d.denomination,
-            a.street,
-            a.house_number,
-            a.box,
-            a.postal_code,
-            a.municipality
-        FROM enterprise e
-        LEFT JOIN denomination d
-            ON e.kbo = d.kbo
-        LEFT JOIN address a
-            ON e.kbo = a.kbo
-        ORDER BY e.kbo
-    """)
-
-    company_count = 0
-
-    for row in cur:
-
-        (
-            kbo,
-            name,
-            street,
-            house_number,
-            box,
-            postal_code,
-            municipality
-        ) = row
-
-        # ----------------------------------------------------
-        # Get telephone numbers for this company
-        # ----------------------------------------------------
-
-        phones = []
-
-        cur2 = conn.cursor()
-
-        cur2.execute("""
-            SELECT phone
-            FROM phone
-            WHERE kbo = ?
-        """, (kbo,))
-
-        for phone_row in cur2:
-
-            phone = phone_row[0]
-
-            if phone and phone not in phones:
-                phones.append(phone)
-
-        # ----------------------------------------------------
-        # Separate GSM and landline
-        # ----------------------------------------------------
-
-        gsm = ""
-        landlines = []
-
-        for phone in phones:
-
-            if is_gsm(phone):
-
-                if not gsm:
-                    gsm = phone
-
-            else:
-
-                if phone not in landlines:
-                    landlines.append(phone)
-
-        tel1 = landlines[0] if len(landlines) > 0 else ""
-        tel2 = landlines[1] if len(landlines) > 1 else ""
-        tel3 = landlines[2] if len(landlines) > 2 else ""
-
-        # ----------------------------------------------------
-        # TVA representation
-        # ----------------------------------------------------
-
-        tva = "BE" + kbo if kbo else ""
-
-        # ----------------------------------------------------
-        # Write row
-        # ----------------------------------------------------
-
-        writer.writerow([
-            kbo,
-            tva,
-            name or "",
-            street or "",
-            house_number or "",
-            box or "",
-            postal_code or "",
-            municipality or "",
-            gsm,
-            tel1,
-            tel2,
-            tel3
-        ])
-
-        company_count += 1
-
-        if company_count % 100000 == 0:
-            print(
-                f"  {company_count:,} companies written"
-            )
-
-
-# ============================================================
-# 12. CLOSE DATABASE
-# ============================================================
-
-conn.close()
-
-
-# ============================================================
-# 13. RESULT
-# ============================================================
-
-print()
-print("=" * 60)
-print("DONE")
-print("=" * 60)
-
-print(f"Companies: {company_count:,}")
-
-print()
-print("Output file:")
-print(OUTPUT_FILE)
-
-print()
-print("Temporary database:")
-print(DB_FILE)
+print("\n========== FINAL RESULTS ==========")
+
+print(f"Unique GSM total       : {len(df):,}")
+print(f"With TVA               : {len(with_tva):,}")
+print(f"Without TVA            : {len(without_tva):,}")
+
+print("\nFiles created:")
+print(with_tva_file)
+print(without_tva_file)
