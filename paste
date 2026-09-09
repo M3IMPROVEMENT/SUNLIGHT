@@ -2,18 +2,20 @@ import pandas as pd
 import re
 
 # ============================================================
-# INPUT / OUTPUT
+# FILES
 # ============================================================
+
 input_file = "master_final_table.xlsx"
 
-clean_file = "phones_clean.xlsx"
-check_file = "GSM_CHECK.xlsx"
-no_gsm_file = "GSM_NO_VALUE.xlsx"
+clean_file = "phones_clean.xlsx"       # GSM + FIXE
+check_file = "GSM_CHECK.xlsx"          # Invalid numbers
+no_gsm_file = "GSM_NO_VALUE.xlsx"      # Empty GSM
 
 
 # ============================================================
 # READ FILE
 # ============================================================
+
 df = pd.read_excel(input_file, dtype=str)
 
 if "GSM" not in df.columns:
@@ -21,15 +23,39 @@ if "GSM" not in df.columns:
 
 
 # ============================================================
-# KEEP ORIGINAL EXCEL ROW NUMBER
-# +2 because Excel row 1 = header
+# COUNT GSM COLUMN BEFORE CLEANING
 # ============================================================
+
+gsm_original = df["GSM"].fillna("").astype(str).str.strip()
+
+total_gsm_cells = len(gsm_original)
+gsm_with_value = (gsm_original != "").sum()
+gsm_empty = (gsm_original == "").sum()
+
+print()
+print("================================================")
+print("       GSM COLUMN BEFORE CLEANING")
+print("================================================")
+print(f"Total GSM cells : {total_gsm_cells:,}")
+print(f"GSM with value  : {gsm_with_value:,}")
+print(f"GSM empty       : {gsm_empty:,}")
+print("================================================")
+
+
+# ============================================================
+# KEEP ORIGINAL EXCEL ROW NUMBER
+# ============================================================
+
+# Excel row 1 = header
+# Therefore dataframe row 0 = Excel row 2
+
 df["EXCEL_ROW"] = df.index + 2
 
 
 # ============================================================
-# CLEAN NUMBER
+# CLEAN ONE PHONE NUMBER
 # ============================================================
+
 def clean_number(value):
 
     if pd.isna(value):
@@ -43,15 +69,26 @@ def clean_number(value):
     # Keep digits only
     number = re.sub(r"\D", "", value)
 
-    # Remove 0032 from beginning
+    # --------------------------------------------------------
+    # Remove Belgian international prefix
+    # --------------------------------------------------------
+
+    # Example:
+    # 0032471123456 -> 471123456
     if number.startswith("0032"):
         number = number[4:]
 
-    # Remove 32 from beginning
+    # Example:
+    # 32471123456 -> 471123456
     elif number.startswith("32"):
         number = number[2:]
 
-    # Remove 0 from beginning
+    # --------------------------------------------------------
+    # Remove leading 0
+    # --------------------------------------------------------
+
+    # Example:
+    # 0471123456 -> 471123456
     if number.startswith("0"):
         number = number[1:]
 
@@ -59,122 +96,255 @@ def clean_number(value):
 
 
 # ============================================================
-# CLASSIFY
+# CLASSIFY ONE NUMBER
 # ============================================================
-def classify_number(value):
 
-    number = clean_number(value)
+def classify_number(number):
 
     if number == "":
-        return "", "NO_GSM"
+        return "NO_GSM"
 
+    # 9 digits = GSM
     if len(number) == 9:
-        return number, "GSM"
+        return "GSM"
 
+    # 8 digits = FIXE
     elif len(number) == 8:
-        return number, "FIXE"
+        return "FIXE"
 
+    # Anything else
     else:
-        return number, "CHECK"
+        return "CHECK"
 
 
 # ============================================================
-# APPLY
+# PROCESS ONE GSM CELL
+#
+# IMPORTANT:
+#
+# We DON'T automatically treat "/" as a separator.
+#
+# FIRST:
+# Try the complete cell as ONE phone number.
+#
+# If it becomes 8 or 9 digits:
+# Keep it as ONE number.
+#
+# ONLY if it is invalid:
+# Try splitting multiple numbers.
 # ============================================================
-df[["PHONE_CLEAN", "TYPE"]] = df["GSM"].apply(
-    lambda x: pd.Series(classify_number(x))
-)
+
+def process_cell(value):
+
+    # --------------------------------------------------------
+    # Empty cell
+    # --------------------------------------------------------
+
+    if pd.isna(value) or str(value).strip() == "":
+        return [
+            {
+                "number": "",
+                "type": "NO_GSM"
+            }
+        ]
+
+    original = str(value).strip()
+
+
+    # ========================================================
+    # STEP 1: Treat entire cell as ONE number
+    # ========================================================
+
+    whole_number = clean_number(original)
+
+    whole_type = classify_number(whole_number)
+
+    # If it is already a valid 8 or 9 digit number,
+    # DON'T split it.
+
+    if whole_type in ["GSM", "FIXE"]:
+
+        return [
+            {
+                "number": whole_number,
+                "type": whole_type
+            }
+        ]
+
+
+    # ========================================================
+    # STEP 2: Whole cell is invalid
+    #
+    # Now try possible separators.
+    # ========================================================
+
+    parts = re.split(r"[/,;|]+", original)
+
+    valid_parts = []
+
+    for part in parts:
+
+        part = part.strip()
+
+        if part == "":
+            continue
+
+        cleaned = clean_number(part)
+
+        phone_type = classify_number(cleaned)
+
+        # Only accept valid GSM or FIXE parts
+
+        if phone_type in ["GSM", "FIXE"]:
+
+            valid_parts.append(
+                {
+                    "number": cleaned,
+                    "type": phone_type
+                }
+            )
+
+
+    # ========================================================
+    # STEP 3: If valid numbers were found after splitting
+    # ========================================================
+
+    if valid_parts:
+
+        return valid_parts
+
+
+    # ========================================================
+    # STEP 4: Nothing valid found
+    # Put it in CHECK
+    # ========================================================
+
+    return [
+        {
+            "number": whole_number,
+            "type": "CHECK"
+        }
+    ]
 
 
 # ============================================================
-# GSM + FIXE
+# CREATE RESULT ROWS
 # ============================================================
-clean_df = df[df["TYPE"].isin(["GSM", "FIXE"])].copy()
 
-clean_df["GSM"] = clean_df["PHONE_CLEAN"]
+rows = []
 
+for _, row in df.iterrows():
+
+    original_gsm = row["GSM"]
+
+    results = process_cell(original_gsm)
+
+    for result in results:
+
+        new_row = row.copy()
+
+        # Original GSM value
+        new_row["GSM_ORIGINAL"] = original_gsm
+
+        # Cleaned phone
+        new_row["GSM"] = result["number"]
+
+        # GSM / FIXE / CHECK / NO_GSM
+        new_row["TYPE"] = result["type"]
+
+        rows.append(new_row)
+
+
+# ============================================================
+# CREATE RESULT DATAFRAME
+# ============================================================
+
+result = pd.DataFrame(rows)
+
+
+# ============================================================
+# GSM + FIXE TOGETHER
+# ============================================================
+
+clean_df = result[
+    result["TYPE"].isin(["GSM", "FIXE"])
+].copy()
+
+# Remove helper/original GSM column
 clean_df.drop(
-    columns=["PHONE_CLEAN"],
+    columns=["GSM_ORIGINAL"],
     inplace=True
 )
 
-clean_df.to_excel(clean_file, index=False)
-
-
-# ============================================================
-# CHECK
-# ============================================================
-check_df = df[df["TYPE"] == "CHECK"].copy()
-
-check_df.rename(
-    columns={
-        "GSM": "GSM_ORIGINAL",
-        "PHONE_CLEAN": "GSM_CLEAN"
-    },
-    inplace=True
+clean_df.to_excel(
+    clean_file,
+    index=False
 )
 
-check_df.to_excel(check_file, index=False)
-
 
 # ============================================================
-# NO GSM / EMPTY GSM
+# CHECK FILE
 # ============================================================
-no_gsm_df = df[df["TYPE"] == "NO_GSM"].copy()
 
-# Remove helper columns except EXCEL_ROW
-no_gsm_df.drop(
-    columns=["PHONE_CLEAN", "TYPE"],
-    inplace=True
+check_df = result[
+    result["TYPE"] == "CHECK"
+].copy()
+
+check_df.to_excel(
+    check_file,
+    index=False
 )
 
-no_gsm_df.to_excel(no_gsm_file, index=False)
+
+# ============================================================
+# NO GSM FILE
+# ============================================================
+
+no_gsm_df = result[
+    result["TYPE"] == "NO_GSM"
+].copy()
+
+no_gsm_df.to_excel(
+    no_gsm_file,
+    index=False
+)
 
 
 # ============================================================
-# SUMMARY
+# FINAL COUNTS
 # ============================================================
-gsm_count = len(df[df["TYPE"] == "GSM"])
-fixe_count = len(df[df["TYPE"] == "FIXE"])
-check_count = len(df[df["TYPE"] == "CHECK"])
-no_gsm_count = len(df[df["TYPE"] == "NO_GSM"])
 
-total = len(df)
+gsm_count = len(
+    result[result["TYPE"] == "GSM"]
+)
 
-print("========================================")
-print("DONE")
-print("========================================")
+fixe_count = len(
+    result[result["TYPE"] == "FIXE"]
+)
 
-print(f"Total rows       : {total}")
-print(f"GSM              : {gsm_count}")
-print(f"FIXE             : {fixe_count}")
-print(f"CHECK            : {check_count}")
-print(f"NO GSM           : {no_gsm_count}")
+check_count = len(
+    result[result["TYPE"] == "CHECK"]
+)
 
-print("----------------------------------------")
+no_gsm_count = len(
+    result[result["TYPE"] == "NO_GSM"]
+)
 
-print(f"GSM + FIXE + CHECK + NO GSM = "
-      f"{gsm_count + fixe_count + check_count + no_gsm_count}")
+total_output_records = len(result)
 
-print("----------------------------------------")
-
-print(f"Clean file       : {clean_file}")
-print(f"Check file       : {check_file}")
-print(f"No GSM file      : {no_gsm_file}")
-
-print("========================================")
 
 # ============================================================
-# SHOW EXCEL ROWS WITH NO GSM
+# FINAL REPORT
 # ============================================================
-if no_gsm_count > 0:
 
-    print("\nRows with NO GSM:")
+print()
+print("================================================")
+print("                    DONE")
+print("================================================")
 
-    print(
-        no_gsm_df["EXCEL_ROW"].tolist()
-    )
-
-else:
-
-    print("\nThere are no rows without GSM.")
+print()
+print("BEFORE CLEANING")
+print("----------------")
+print(f"Total GSM cells : {total_gsm_cells:,}")
+print(f"With value      : {gsm_with_value:,}")
+print(f"Empty           : {gsm_empty:,}")
