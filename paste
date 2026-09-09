@@ -2,103 +2,112 @@ import pandas as pd
 from pathlib import Path
 
 # ============================================================
-# 1. INPUT FILE
+# 1. FOLDER CONTAINING YOUR 9 FILES
 # ============================================================
 
-input_file = Path(r"C:\YOUR_PATH\YOUR_CURRENT_MASTER_FILE.xlsx")
-
-# Output folder
-output_dir = input_file.parent / "GSM_DEDUP_SPLIT"
-output_dir.mkdir(exist_ok=True)
+folder = Path(r"C:\YOUR_PATH\YOUR_FOLDER")
 
 # ============================================================
-# 2. READ FILE
+# 2. FIND ALL EXCEL FILES
 # ============================================================
 
-df = pd.read_excel(input_file, dtype=str)
+files = list(folder.glob("*.xlsx"))
 
-# Clean column names
-df.columns = df.columns.str.strip()
+print(f"Excel files found: {len(files)}")
 
-print("Original rows:", len(df))
-
-# ============================================================
-# 3. CLEAN GSM
-# ============================================================
-
-df["GSM"] = df["GSM"].fillna("").astype(str).str.strip()
-
-# Remove Excel .0 if present
-df["GSM"] = df["GSM"].str.replace(r"\.0$", "", regex=True)
+if len(files) == 0:
+    raise FileNotFoundError("No Excel files found in this folder.")
 
 # ============================================================
-# 4. REMOVE EMPTY GSM
+# 3. READ AND COMBINE ALL FILES
 # ============================================================
 
-df = df[df["GSM"] != ""].copy()
+dataframes = []
 
-print("Rows with GSM:", len(df))
+for file in files:
+    print(f"Reading: {file.name}")
+
+    df = pd.read_excel(file, dtype=str)
+
+    # Clean column names
+    df.columns = df.columns.str.strip()
+
+    dataframes.append(df)
+
+# Combine everything
+master = pd.concat(dataframes, ignore_index=True)
+
+print("\nTotal rows before cleaning:", len(master))
 
 # ============================================================
-# 5. REMOVE DUPLICATE GSM
+# 4. CHECK GSM COLUMN
 # ============================================================
 
-before = len(df)
+if "GSM" not in master.columns:
+    raise ValueError("GSM column was not found.")
 
-df = df.drop_duplicates(
+# ============================================================
+# 5. CLEAN GSM
+# ============================================================
+
+master["GSM"] = (
+    master["GSM"]
+    .fillna("")
+    .astype(str)
+    .str.strip()
+)
+
+# Remove Excel .0
+master["GSM"] = master["GSM"].str.replace(
+    r"\.0$", "", regex=True
+)
+
+# ============================================================
+# 6. REMOVE ROWS WITHOUT GSM
+# ============================================================
+
+master = master[master["GSM"] != ""].copy()
+
+print("Rows with GSM:", len(master))
+
+# ============================================================
+# 7. REMOVE DUPLICATE GSM
+# ============================================================
+
+before = len(master)
+
+master = master.drop_duplicates(
     subset=["GSM"],
     keep="first"
 ).copy()
 
-after = len(df)
+after = len(master)
 
-print("Unique GSM rows:", after)
-print("Duplicate GSM removed:", before - after)
+duplicates_removed = before - after
 
 # ============================================================
-# 6. CLEAN TVA
+# 8. SAVE ONE FINAL FILE
 # ============================================================
 
-df["TVA"] = df["TVA"].fillna("").astype(str).str.strip()
+output_file = folder / "MASTER_GSM_UNIQUE.xlsx"
 
-# Treat these as empty TVA
-df["TVA"] = df["TVA"].replace(
-    ["nan", "NaN", "None", "NONE"],
-    ""
+master.to_excel(
+    output_file,
+    index=False
 )
 
 # ============================================================
-# 7. SPLIT WITH TVA / WITHOUT TVA
+# 9. RESULTS
 # ============================================================
 
-with_tva = df[df["TVA"] != ""].copy()
+print("\n======================================")
+print("DONE")
+print("======================================")
 
-without_tva = df[df["TVA"] == ""].copy()
+print(f"Files processed       : {len(files)}")
+print(f"Rows before dedup     : {before:,}")
+print(f"Unique GSM rows       : {after:,}")
+print(f"Duplicates removed    : {duplicates_removed:,}")
 
-# ============================================================
-# 8. SAVE FILES
-# ============================================================
-
-with_tva_file = output_dir / "GSM_UNIQUE_WITH_TVA.xlsx"
-without_tva_file = output_dir / "GSM_UNIQUE_WITHOUT_TVA.xlsx"
-
-with_tva.to_excel(with_tva_file, index=False)
-without_tva.to_excel(without_tva_file, index=False)
-
-# ============================================================
-# 9. SUMMARY
-# ============================================================
-
-print("\n====================================")
-print("FINAL RESULTS")
-print("====================================")
-
-print(f"Original rows       : {len(df) + (before - after):,}")
-print(f"Unique GSM          : {len(df):,}")
-print(f"With TVA            : {len(with_tva):,}")
-print(f"Without TVA         : {len(without_tva):,}")
-print(f"Duplicates removed  : {before - after:,}")
-
-print("\nFiles created:")
-print(with_tva_file)
-print(without_tva_file)
+print("\nFinal file:")
+print(output_file)
