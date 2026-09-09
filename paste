@@ -1,113 +1,136 @@
 import pandas as pd
-from pathlib import Path
+import re
 
 # ============================================================
-# 1. FOLDER CONTAINING YOUR 9 FILES
+# INPUT FILE
 # ============================================================
+input_file = "master_final_table.xlsx"
 
-folder = Path(r"C:\YOUR_PATH\YOUR_FOLDER")
+# OUTPUT FILES
+clean_file = "phones_clean.xlsx"
+check_file = "GSM_CHECK.xlsx"
 
-# ============================================================
-# 2. FIND ALL EXCEL FILES
-# ============================================================
-
-files = list(folder.glob("*.xlsx"))
-
-print(f"Excel files found: {len(files)}")
-
-if len(files) == 0:
-    raise FileNotFoundError("No Excel files found in this folder.")
 
 # ============================================================
-# 3. READ AND COMBINE ALL FILES
+# READ FILE
 # ============================================================
+df = pd.read_excel(input_file, dtype=str)
 
-dataframes = []
+if "GSM" not in df.columns:
+    raise ValueError("Column 'GSM' was not found.")
 
-for file in files:
-    print(f"Reading: {file.name}")
-
-    df = pd.read_excel(file, dtype=str)
-
-    # Clean column names
-    df.columns = df.columns.str.strip()
-
-    dataframes.append(df)
-
-# Combine everything
-master = pd.concat(dataframes, ignore_index=True)
-
-print("\nTotal rows before cleaning:", len(master))
 
 # ============================================================
-# 4. CHECK GSM COLUMN
+# CLEAN NUMBER
 # ============================================================
+def clean_number(value):
 
-if "GSM" not in master.columns:
-    raise ValueError("GSM column was not found.")
+    if pd.isna(value):
+        return ""
+
+    value = str(value).strip()
+
+    if value == "":
+        return ""
+
+    # Keep digits only
+    number = re.sub(r"\D", "", value)
+
+    # Remove 0032 from beginning
+    if number.startswith("0032"):
+        number = number[4:]
+
+    # Remove 32 from beginning
+    elif number.startswith("32"):
+        number = number[2:]
+
+    # Remove 0 from beginning
+    if number.startswith("0"):
+        number = number[1:]
+
+    return number
+
 
 # ============================================================
-# 5. CLEAN GSM
+# CLASSIFY NUMBER
 # ============================================================
+def classify_number(value):
 
-master["GSM"] = (
-    master["GSM"]
-    .fillna("")
-    .astype(str)
-    .str.strip()
+    number = clean_number(value)
+
+    if number == "":
+        return "", ""
+
+    # 9 digits = GSM
+    if len(number) == 9:
+        return number, "GSM"
+
+    # 8 digits = FIXE
+    elif len(number) == 8:
+        return number, "FIXE"
+
+    # Anything else = CHECK
+    else:
+        return number, "CHECK"
+
+
+# ============================================================
+# APPLY
+# ============================================================
+df[["PHONE_CLEAN", "TYPE"]] = df["GSM"].apply(
+    lambda x: pd.Series(classify_number(x))
 )
 
-# Remove Excel .0
-master["GSM"] = master["GSM"].str.replace(
-    r"\.0$", "", regex=True
+
+# ============================================================
+# VALID NUMBERS
+# GSM + FIXE IN ONE FILE
+# ============================================================
+clean_df = df[df["TYPE"].isin(["GSM", "FIXE"])].copy()
+
+# Replace GSM with cleaned number
+clean_df["GSM"] = clean_df["PHONE_CLEAN"]
+
+# Remove helper column
+clean_df.drop(
+    columns=["PHONE_CLEAN"],
+    inplace=True
 )
 
-# ============================================================
-# 6. REMOVE ROWS WITHOUT GSM
-# ============================================================
+clean_df.to_excel(clean_file, index=False)
 
-master = master[master["GSM"] != ""].copy()
-
-print("Rows with GSM:", len(master))
 
 # ============================================================
-# 7. REMOVE DUPLICATE GSM
+# CHECK NUMBERS IN SEPARATE FILE
 # ============================================================
+check_df = df[df["TYPE"] == "CHECK"].copy()
 
-before = len(master)
-
-master = master.drop_duplicates(
-    subset=["GSM"],
-    keep="first"
-).copy()
-
-after = len(master)
-
-duplicates_removed = before - after
-
-# ============================================================
-# 8. SAVE ONE FINAL FILE
-# ============================================================
-
-output_file = folder / "MASTER_GSM_UNIQUE.xlsx"
-
-master.to_excel(
-    output_file,
-    index=False
+# Keep the original number
+check_df.rename(
+    columns={"GSM": "GSM_ORIGINAL"},
+    inplace=True
 )
 
-# ============================================================
-# 9. RESULTS
-# ============================================================
+# Rename cleaned number
+check_df.rename(
+    columns={"PHONE_CLEAN": "GSM_CLEAN"},
+    inplace=True
+)
 
-print("\n======================================")
+check_df.to_excel(check_file, index=False)
+
+
+# ============================================================
+# SUMMARY
+# ============================================================
+print("========================================")
 print("DONE")
-print("======================================")
+print("========================================")
 
-print(f"Files processed       : {len(files)}")
-print(f"Rows before dedup     : {before:,}")
-print(f"Unique GSM rows       : {after:,}")
-print(f"Duplicates removed    : {duplicates_removed:,}")
+print(f"Clean file : {clean_file}")
+print(f"Check file : {check_file}")
 
-print("\nFinal file:")
-print(output_file)
+print("\nResults:")
+print(f"GSM   : {len(df[df['TYPE'] == 'GSM'])}")
+print(f"FIXE  : {len(df[df['TYPE'] == 'FIXE'])}")
+print(f"CHECK : {len(df[df['TYPE'] == 'CHECK'])}")
