@@ -2,13 +2,13 @@ import pandas as pd
 import re
 
 # ============================================================
-# INPUT FILE
+# INPUT / OUTPUT
 # ============================================================
 input_file = "master_final_table.xlsx"
 
-# OUTPUT FILES
 clean_file = "phones_clean.xlsx"
 check_file = "GSM_CHECK.xlsx"
+no_gsm_file = "GSM_NO_VALUE.xlsx"
 
 
 # ============================================================
@@ -18,6 +18,13 @@ df = pd.read_excel(input_file, dtype=str)
 
 if "GSM" not in df.columns:
     raise ValueError("Column 'GSM' was not found.")
+
+
+# ============================================================
+# KEEP ORIGINAL EXCEL ROW NUMBER
+# +2 because Excel row 1 = header
+# ============================================================
+df["EXCEL_ROW"] = df.index + 2
 
 
 # ============================================================
@@ -52,24 +59,21 @@ def clean_number(value):
 
 
 # ============================================================
-# CLASSIFY NUMBER
+# CLASSIFY
 # ============================================================
 def classify_number(value):
 
     number = clean_number(value)
 
     if number == "":
-        return "", ""
+        return "", "NO_GSM"
 
-    # 9 digits = GSM
     if len(number) == 9:
         return number, "GSM"
 
-    # 8 digits = FIXE
     elif len(number) == 8:
         return number, "FIXE"
 
-    # Anything else = CHECK
     else:
         return number, "CHECK"
 
@@ -83,15 +87,12 @@ df[["PHONE_CLEAN", "TYPE"]] = df["GSM"].apply(
 
 
 # ============================================================
-# VALID NUMBERS
-# GSM + FIXE IN ONE FILE
+# GSM + FIXE
 # ============================================================
 clean_df = df[df["TYPE"].isin(["GSM", "FIXE"])].copy()
 
-# Replace GSM with cleaned number
 clean_df["GSM"] = clean_df["PHONE_CLEAN"]
 
-# Remove helper column
 clean_df.drop(
     columns=["PHONE_CLEAN"],
     inplace=True
@@ -101,19 +102,15 @@ clean_df.to_excel(clean_file, index=False)
 
 
 # ============================================================
-# CHECK NUMBERS IN SEPARATE FILE
+# CHECK
 # ============================================================
 check_df = df[df["TYPE"] == "CHECK"].copy()
 
-# Keep the original number
 check_df.rename(
-    columns={"GSM": "GSM_ORIGINAL"},
-    inplace=True
-)
-
-# Rename cleaned number
-check_df.rename(
-    columns={"PHONE_CLEAN": "GSM_CLEAN"},
+    columns={
+        "GSM": "GSM_ORIGINAL",
+        "PHONE_CLEAN": "GSM_CLEAN"
+    },
     inplace=True
 )
 
@@ -121,16 +118,63 @@ check_df.to_excel(check_file, index=False)
 
 
 # ============================================================
+# NO GSM / EMPTY GSM
+# ============================================================
+no_gsm_df = df[df["TYPE"] == "NO_GSM"].copy()
+
+# Remove helper columns except EXCEL_ROW
+no_gsm_df.drop(
+    columns=["PHONE_CLEAN", "TYPE"],
+    inplace=True
+)
+
+no_gsm_df.to_excel(no_gsm_file, index=False)
+
+
+# ============================================================
 # SUMMARY
 # ============================================================
+gsm_count = len(df[df["TYPE"] == "GSM"])
+fixe_count = len(df[df["TYPE"] == "FIXE"])
+check_count = len(df[df["TYPE"] == "CHECK"])
+no_gsm_count = len(df[df["TYPE"] == "NO_GSM"])
+
+total = len(df)
+
 print("========================================")
 print("DONE")
 print("========================================")
 
-print(f"Clean file : {clean_file}")
-print(f"Check file : {check_file}")
+print(f"Total rows       : {total}")
+print(f"GSM              : {gsm_count}")
+print(f"FIXE             : {fixe_count}")
+print(f"CHECK            : {check_count}")
+print(f"NO GSM           : {no_gsm_count}")
 
-print("\nResults:")
-print(f"GSM   : {len(df[df['TYPE'] == 'GSM'])}")
-print(f"FIXE  : {len(df[df['TYPE'] == 'FIXE'])}")
-print(f"CHECK : {len(df[df['TYPE'] == 'CHECK'])}")
+print("----------------------------------------")
+
+print(f"GSM + FIXE + CHECK + NO GSM = "
+      f"{gsm_count + fixe_count + check_count + no_gsm_count}")
+
+print("----------------------------------------")
+
+print(f"Clean file       : {clean_file}")
+print(f"Check file       : {check_file}")
+print(f"No GSM file      : {no_gsm_file}")
+
+print("========================================")
+
+# ============================================================
+# SHOW EXCEL ROWS WITH NO GSM
+# ============================================================
+if no_gsm_count > 0:
+
+    print("\nRows with NO GSM:")
+
+    print(
+        no_gsm_df["EXCEL_ROW"].tolist()
+    )
+
+else:
+
+    print("\nThere are no rows without GSM.")
