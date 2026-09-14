@@ -1,18 +1,48 @@
 from pathlib import Path
-from openpyxl import load_workbook
-import csv
+from openpyxl import load_workbook, Workbook
 from datetime import datetime
 
 # ============================================================
 # STEP 1
-# MERGE EXCEL FILES TWO BY TWO
+# SMART MERGE OF EXCEL FILES
+#
+# OUTPUT:
+#   MASTER_001.xlsx
+#   MASTER_002.xlsx
+#   MASTER_003.xlsx
+#   ...
+#
+# TARGET:
+#   Maximum ~700,000 DATA ROWS per output file
+#
+# IMPORTANT:
+# - Nothing is deleted
+# - No duplicates are removed
+# - No cleaning
+# - No filtering
+# - Only selected columns are kept
+# - SOURCE is added at the end
 # ============================================================
 
-# 👇 CHANGE THIS TO YOUR FOLDER
-INPUT_FOLDER = Path(r"C:\YOUR_FOLDER_HERE")
 
 # ============================================================
-# COLUMNS TO KEEP
+# 1. YOUR INPUT FOLDER
+# ============================================================
+
+INPUT_FOLDER = Path(
+    r"C:\YOUR_FOLDER_HERE"
+)
+
+
+# ============================================================
+# 2. MAXIMUM ROWS PER MASTER
+# ============================================================
+
+MAX_ROWS_PER_MASTER = 700_000
+
+
+# ============================================================
+# 3. COLUMNS TO KEEP
 # ============================================================
 
 KEEP_COLUMNS = [
@@ -30,264 +60,440 @@ KEEP_COLUMNS = [
     "TEL3"
 ]
 
+
 # ============================================================
-# FIND EXCEL FILES
+# 4. FIND EXCEL FILES
 # ============================================================
 
 files = sorted([
-    f for f in INPUT_FOLDER.iterdir()
+    f
+    for f in INPUT_FOLDER.iterdir()
     if f.is_file()
     and f.suffix.lower() in [".xlsx", ".xlsm"]
     and not f.name.startswith("~$")
 ])
 
-print("=" * 70)
-print("MERGE EXCEL FILES TWO BY TWO")
-print("=" * 70)
 
-print(f"Files found: {len(files)}")
+print("=" * 75)
+print("SMART EXCEL MERGE")
+print("=" * 75)
+
+print(f"Excel files found: {len(files)}")
+
 
 if not files:
-    raise Exception("No Excel files found.")
-
-# ============================================================
-# OUTPUT FOLDER
-# ============================================================
-
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-OUTPUT_FOLDER = INPUT_FOLDER / f"MASTER_OUTPUT_{timestamp}"
-
-OUTPUT_FOLDER.mkdir(exist_ok=True)
-
-# ============================================================
-# PROCESS TWO FILES AT A TIME
-# ============================================================
-
-total_rows = 0
-total_output_files = 0
-errors = []
-
-for i in range(0, len(files), 2):
-
-    file1 = files[i]
-
-    # Second file in the pair, if it exists
-    file2 = files[i + 1] if i + 1 < len(files) else None
-
-    pair_number = (i // 2) + 1
-
-    output_path = (
-        OUTPUT_FOLDER /
-        f"MASTER_{pair_number:03d}.csv"
+    raise Exception(
+        "No Excel files found."
     )
 
-    print("\n" + "=" * 70)
-    print(f"PAIR {pair_number}")
-    print("=" * 70)
 
-    print(f"File 1: {file1.name}")
+# ============================================================
+# 5. OUTPUT FOLDER
+# ============================================================
 
-    if file2:
-        print(f"File 2: {file2.name}")
-    else:
-        print("File 2: NONE")
+timestamp = datetime.now().strftime(
+    "%Y%m%d_%H%M%S"
+)
+
+OUTPUT_FOLDER = (
+    INPUT_FOLDER /
+    f"MASTER_OUTPUT_{timestamp}"
+)
+
+OUTPUT_FOLDER.mkdir(
+    exist_ok=True
+)
+
+
+# ============================================================
+# VARIABLES
+# ============================================================
+
+master_number = 0
+
+current_master_rows = 0
+total_rows = 0
+total_files = 0
+
+errors = []
+
+wb_out = None
+ws_out = None
+
+
+# ============================================================
+# CREATE NEW MASTER
+# ============================================================
+
+def create_new_master():
+
+    global master_number
+    global current_master_rows
+    global wb_out
+    global ws_out
+
+    # Close previous workbook
+    if wb_out is not None:
+
+        wb_out.save(
+            current_output_path
+        )
+
+        wb_out.close()
+
+    master_number += 1
+
+    current_master_rows = 0
+
+    # New filename
+    filename = (
+        f"MASTER_{master_number:03d}.xlsx"
+    )
+
+    global current_output_path
+
+    current_output_path = (
+        OUTPUT_FOLDER / filename
+    )
+
+    print("\n" + "=" * 75)
+
+    print(
+        f"CREATING {filename}"
+    )
+
+    print("=" * 75)
+
+    # Write-only workbook
+    wb_out = Workbook(
+        write_only=True
+    )
+
+    ws_out = wb_out.create_sheet(
+        title="Master"
+    )
+
+    # Header
+    ws_out.append(
+        KEEP_COLUMNS + ["SOURCE"]
+    )
+
+
+# ============================================================
+# CREATE FIRST MASTER
+# ============================================================
+
+create_new_master()
+
+
+# ============================================================
+# PROCESS EACH EXCEL FILE
+# ============================================================
+
+for file_number, file_path in enumerate(
+    files,
+    start=1
+):
+
+    print("\n" + "-" * 75)
+
+    print(
+        f"[{file_number}/{len(files)}] "
+        f"{file_path.name}"
+    )
 
     try:
 
-        # ----------------------------------------------------
-        # CREATE OUTPUT CSV
-        # ----------------------------------------------------
+        # ====================================================
+        # OPEN INPUT FILE
+        # ====================================================
 
-        with open(
-            output_path,
-            "w",
-            newline="",
-            encoding="utf-8-sig"
-        ) as output:
+        wb_in = load_workbook(
+            filename=file_path,
+            read_only=True,
+            data_only=False
+        )
 
-            writer = csv.writer(output)
+        ws_in = wb_in[
+            wb_in.sheetnames[0]
+        ]
 
-            # Header
-            writer.writerow(
-                KEEP_COLUMNS + ["SOURCE"]
-            )
+        rows = ws_in.iter_rows(
+            values_only=True
+        )
 
-            # ------------------------------------------------
-            # PROCESS THE TWO FILES
-            # ------------------------------------------------
 
-            pair_rows = 0
+        # ====================================================
+        # READ HEADER
+        # ====================================================
 
-            for file_path in [file1, file2]:
+        try:
 
-                if file_path is None:
-                    continue
+            original_header = next(rows)
 
-                print(
-                    f"\nReading: {file_path.name}"
-                )
-
-                # Read-only mode = lower RAM usage
-                wb = load_workbook(
-                    filename=file_path,
-                    read_only=True,
-                    data_only=False
-                )
-
-                ws = wb[wb.sheetnames[0]]
-
-                rows = ws.iter_rows(
-                    values_only=True
-                )
-
-                # Read header
-                original_header = next(rows)
-
-                # ------------------------------------------------
-                # HEADER MAP
-                # ------------------------------------------------
-
-                header_map = {}
-
-                for index, column in enumerate(
-                    original_header
-                ):
-
-                    if column is not None:
-
-                        name = (
-                            str(column)
-                            .strip()
-                            .upper()
-                        )
-
-                        header_map[name] = index
-
-                # ------------------------------------------------
-                # CHECK COLUMNS
-                # ------------------------------------------------
-
-                missing = [
-                    col
-                    for col in KEEP_COLUMNS
-                    if col.upper() not in header_map
-                ]
-
-                if missing:
-
-                    print(
-                        f"WARNING - Missing columns: "
-                        f"{missing}"
-                    )
-
-                # ------------------------------------------------
-                # WRITE EVERY ROW
-                # ------------------------------------------------
-
-                file_rows = 0
-
-                for row in rows:
-
-                    output_row = []
-
-                    for column in KEEP_COLUMNS:
-
-                        index = header_map.get(
-                            column.upper()
-                        )
-
-                        if (
-                            index is not None
-                            and index < len(row)
-                        ):
-
-                            value = row[index]
-
-                        else:
-
-                            value = ""
-
-                        output_row.append(value)
-
-                    # SOURCE LAST
-                    output_row.append(
-                        file_path.name
-                    )
-
-                    writer.writerow(
-                        output_row
-                    )
-
-                    file_rows += 1
-                    pair_rows += 1
-                    total_rows += 1
-
-                wb.close()
-
-                print(
-                    f"✓ {file_rows:,} rows written"
-                )
+        except StopIteration:
 
             print(
-                f"\n✓ MASTER_{pair_number:03d}.csv "
-                f"= {pair_rows:,} rows"
+                "⚠ Empty file - skipped."
             )
 
-        total_output_files += 1
+            wb_in.close()
+
+            continue
+
+
+        # ====================================================
+        # CREATE HEADER MAP
+        # ====================================================
+
+        header_map = {}
+
+        for index, column in enumerate(
+            original_header
+        ):
+
+            if column is not None:
+
+                name = (
+                    str(column)
+                    .strip()
+                    .upper()
+                )
+
+                header_map[name] = index
+
+
+        # ====================================================
+        # CHECK MISSING COLUMNS
+        # ====================================================
+
+        missing = [
+            column
+            for column in KEEP_COLUMNS
+            if column.upper()
+            not in header_map
+        ]
+
+        if missing:
+
+            print(
+                f"⚠ Missing columns: {missing}"
+            )
+
+
+        # ====================================================
+        # PROCESS ROWS
+        # ====================================================
+
+        file_rows = 0
+
+        for row in rows:
+
+            # ------------------------------------------------
+            # BUILD OUTPUT ROW
+            # ------------------------------------------------
+
+            output_row = []
+
+            for column in KEEP_COLUMNS:
+
+                index = header_map.get(
+                    column.upper()
+                )
+
+                if (
+                    index is not None
+                    and index < len(row)
+                ):
+
+                    value = row[index]
+
+                else:
+
+                    value = None
+
+                output_row.append(value)
+
+
+            # ------------------------------------------------
+            # ADD SOURCE AT THE END
+            # ------------------------------------------------
+
+            output_row.append(
+                file_path.name
+            )
+
+
+            # ------------------------------------------------
+            # WRITE ROW
+            # ------------------------------------------------
+
+            ws_out.append(
+                output_row
+            )
+
+            current_master_rows += 1
+            total_rows += 1
+            file_rows += 1
+
+
+            # ------------------------------------------------
+            # IMPORTANT:
+            #
+            # We do NOT split in the middle of a source file.
+            #
+            # The current source is allowed to finish.
+            #
+            # After the file finishes, if the Master is
+            # over 700,000, the next source starts a new one.
+            # ------------------------------------------------
+
+
+        wb_in.close()
+
+        total_files += 1
+
+        print(
+            f"✓ {file_rows:,} rows copied"
+        )
+
+        print(
+            f"Current Master rows: "
+            f"{current_master_rows:,}"
+        )
+
+
+        # ====================================================
+        # IF MASTER HAS REACHED / EXCEEDED TARGET
+        # START NEW MASTER FOR NEXT SOURCE
+        # ====================================================
+
+        if (
+            current_master_rows
+            >= MAX_ROWS_PER_MASTER
+        ):
+
+            print(
+                "\n→ Target reached."
+            )
+
+            print(
+                "→ Next source will start "
+                "a new Master."
+            )
+
+            # Save current Master
+            wb_out.save(
+                current_output_path
+            )
+
+            wb_out.close()
+
+            wb_out = None
+            ws_out = None
+
+            create_new_master()
+
 
     except Exception as error:
 
         errors.append(
-            f"PAIR {pair_number}: {error}"
+            f"{file_path.name} -> {error}"
         )
 
         print(
             f"❌ ERROR: {error}"
         )
 
+
+# ============================================================
+# SAVE FINAL MASTER
+# ============================================================
+
+if wb_out is not None:
+
+    wb_out.save(
+        current_output_path
+    )
+
+    wb_out.close()
+
+
 # ============================================================
 # FINAL REPORT
 # ============================================================
 
 print("\n")
-print("=" * 70)
-print("FINISHED")
-print("=" * 70)
+print("=" * 75)
+print("MERGE FINISHED")
+print("=" * 75)
 
 print(
-    f"Excel files found   : {len(files):,}"
+    f"Excel files found     : "
+    f"{len(files):,}"
 )
 
 print(
-    f"Master files created: {total_output_files:,}"
+    f"Excel files processed : "
+    f"{total_files:,}"
 )
 
 print(
-    f"Total rows          : {total_rows:,}"
+    f"Master files created  : "
+    f"{master_number:,}"
 )
 
 print(
-    f"Errors              : {len(errors):,}"
+    f"Total rows copied     : "
+    f"{total_rows:,}"
 )
 
 print(
-    f"\nOutput folder:\n{OUTPUT_FOLDER}"
+    f"Errors                : "
+    f"{len(errors):,}"
 )
+
+print(
+    f"\nOutput folder:\n"
+    f"{OUTPUT_FOLDER}"
+)
+
+
+# ============================================================
+# ERRORS
+# ============================================================
 
 if errors:
 
-    print("\nERRORS:")
+    print("\n" + "=" * 75)
+    print("ERRORS")
+    print("=" * 75)
 
     for error in errors:
-        print(" -", error)
+
+        print(
+            " -",
+            error
+        )
 
 else:
 
-    print("\n✓ Everything completed successfully.")
+    print(
+        "\n✓ ALL FILES PROCESSED SUCCESSFULLY"
+    )
 
-print("\nNothing was:")
+
+print("\n")
+print("NOTHING WAS:")
 print("✓ Deleted")
 print("✓ Deduplicated")
 print("✓ Cleaned")
 print("✓ Filtered")
+
+print("\nKept columns:")
+
+print(
+    ", ".join(KEEP_COLUMNS)
+)
+
+print("\nSOURCE = last column")
