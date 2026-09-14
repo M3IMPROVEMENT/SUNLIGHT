@@ -1,89 +1,96 @@
 import pandas as pd
-import glob
-import os
+from pathlib import Path
+from datetime import datetime
 
-# Folder containing the Excel files
-folder_path = r"C:\Users\Sunlight\Desktop\IMANE19-24-26\ALL DATA-14\traiter"
+# ============================================================
+# STEP 1 — MERGE ALL EXCEL FILES INTO ONE MASTER CSV
+# NOTHING IS DELETED OR CLEANED
+# ============================================================
 
-# Final columns required
-final_columns = [
-    "STE", "TVA", "NOM", "ADRESSE", "NUMERO",
-    "COMPLEMENT", "CP", "VILLE", "GSM",
-    "TEL1", "TEL2", "TEL3"
+# 📁 Folder containing your Excel files
+INPUT_FOLDER = Path(r"C:\YOUR_FOLDER_HERE")
+
+# 📄 Output file
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+OUTPUT_FILE = INPUT_FOLDER / f"MASTER_MERGED_{timestamp}.csv"
+
+# Excel extensions to read
+EXCEL_EXTENSIONS = {".xlsx", ".xls", ".xlsm"}
+
+# Find all Excel files
+files = [
+    f for f in INPUT_FOLDER.rglob("*")
+    if f.is_file()
+    and f.suffix.lower() in EXCEL_EXTENSIONS
+    and not f.name.startswith("~$")
 ]
 
-all_data = []
+print(f"Excel files found: {len(files)}")
 
-# Read all Excel files
-files = glob.glob(os.path.join(folder_path, "*.xlsx"))
+if not files:
+    raise FileNotFoundError("No Excel files were found in the selected folder.")
 
-for file in files:
-    print("Reading:", os.path.basename(file))
+# ------------------------------------------------------------
+# Read files one by one and write directly to CSV
+# This avoids creating one enormous DataFrame in memory.
+# ------------------------------------------------------------
 
-    df = pd.read_excel(file)
+first_file = True
+total_rows = 0
+successful_files = 0
+failed_files = []
 
-    # Clean column names
-    df.columns = df.columns.astype(str).str.strip().str.upper()
+for i, file in enumerate(files, start=1):
 
-    # Keep only existing required columns
-    df = df[[col for col in final_columns if col in df.columns]]
+    print(f"[{i}/{len(files)}] Reading: {file.name}")
 
-    # Add missing columns
-    for col in final_columns:
-        if col not in df.columns:
-            df[col] = ""
+    try:
+        # Read the Excel file exactly as it is
+        df = pd.read_excel(file, dtype=object)
 
-    # Remove completely empty rows
-    df = df.replace(r'^\s*$', pd.NA, regex=True)
-    df = df.dropna(subset=final_columns, how="all")
+        # Keep EVERYTHING from the file
+        rows = len(df)
+        total_rows += rows
 
-    # Add source file
-    df["SOURCE"] = os.path.basename(file)
+        # Add source file information
+        # This does NOT delete or modify your original columns.
+        df["SOURCE_FILE"] = file.name
 
-    # Reorder columns
-    df = df[final_columns + ["SOURCE"]]
+        # Write to CSV
+        df.to_csv(
+            OUTPUT_FILE,
+            mode="w" if first_file else "a",
+            header=first_file,
+            index=False,
+            encoding="utf-8-sig"
+        )
 
-    all_data.append(df)
+        first_file = False
+        successful_files += 1
 
-# Merge all files
-master = pd.concat(all_data, ignore_index=True)
+        print(f"    ✓ {rows:,} rows")
 
-# ==========================
-# CLEAN AND CHECK CP
-# ==========================
+    except Exception as e:
+        failed_files.append((file.name, str(e)))
+        print(f"    ❌ ERROR: {e}")
 
-cp = (
-    master["CP"]
-    .fillna("")
-    .astype(str)
-    .str.strip()
-    .str.replace("\u00A0", "", regex=False)
-    .str.replace(r"\.0$", "", regex=True)
-)
+# ============================================================
+# FINAL REPORT
+# ============================================================
 
-# Save cleaned CP back
-master["CP"] = cp
+print("\n" + "=" * 60)
+print("MERGE FINISHED")
+print("=" * 60)
 
-# Valid CP = exactly 4 digits
-# Empty CP values are ignored (kept in the master)
-valid_mask = (
-    (cp == "") |
-    (cp.str.lower() == "nan") |
-    (cp.str.lower() == "none") |
-    (cp.str.fullmatch(r"\d{4}"))
-)
+print(f"Files found       : {len(files):,}")
+print(f"Files processed   : {successful_files:,}")
+print(f"Files with errors : {len(failed_files):,}")
+print(f"Total rows        : {total_rows:,}")
+print(f"\nMaster file       : {OUTPUT_FILE}")
 
-# Split files
-master_clean = master[valid_mask].copy()
-wrong_cp = master[~valid_mask].copy()
-
-# ==========================l
-# SAVE FILES
-# ==========================
-
-master_clean.to_excel("master_final_table.xlsx", index=False)
-wrong_cp.to_excel("CP_wrong_length.xlsx", index=False)
-
-print("\nDONE")
-print("Rows in master:", len(master_clean))
-print("Rows with wrong CP:", len(wrong_cp))
+if failed_files:
+    print("\nFILES WITH ERRORS:")
+    for filename, error in failed_files:
+        print(f" - {filename}: {error}")
+else:
+    print("\n✓ All Excel files were successfully merged.")
