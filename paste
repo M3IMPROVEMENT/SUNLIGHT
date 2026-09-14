@@ -2,47 +2,20 @@ from pathlib import Path
 from openpyxl import load_workbook, Workbook
 from datetime import datetime
 
-# ============================================================
-# STEP 1
-# SMART MERGE OF EXCEL FILES
-#
-# OUTPUT:
-#   MASTER_001.xlsx
-#   MASTER_002.xlsx
-#   MASTER_003.xlsx
-#   ...
-#
-# TARGET:
-#   Maximum ~700,000 DATA ROWS per output file
-#
-# IMPORTANT:
-# - Nothing is deleted
-# - No duplicates are removed
-# - No cleaning
-# - No filtering
-# - Only selected columns are kept
-# - SOURCE is added at the end
-# ============================================================
-
 
 # ============================================================
-# 1. YOUR INPUT FOLDER
+# SETTINGS
 # ============================================================
 
-INPUT_FOLDER = Path(
-    r"C:\YOUR_FOLDER_HERE"
-)
+# CHANGE THIS
+INPUT_FOLDER = Path(r"C:\YOUR_FOLDER_HERE")
 
-
-# ============================================================
-# 2. MAXIMUM ROWS PER MASTER
-# ============================================================
-
+# Target maximum number of DATA rows
 MAX_ROWS_PER_MASTER = 700_000
 
 
 # ============================================================
-# 3. COLUMNS TO KEEP
+# COLUMNS TO KEEP
 # ============================================================
 
 KEEP_COLUMNS = [
@@ -62,7 +35,7 @@ KEEP_COLUMNS = [
 
 
 # ============================================================
-# 4. FIND EXCEL FILES
+# FIND EXCEL FILES
 # ============================================================
 
 files = sorted([
@@ -74,35 +47,31 @@ files = sorted([
 ])
 
 
-print("=" * 75)
+print("=" * 70)
 print("SMART EXCEL MERGE")
-print("=" * 75)
+print("=" * 70)
 
 print(f"Excel files found: {len(files)}")
 
 
 if not files:
-    raise Exception(
-        "No Excel files found."
-    )
+    raise Exception("No Excel files found.")
 
 
 # ============================================================
-# 5. OUTPUT FOLDER
+# OUTPUT FOLDER
 # ============================================================
 
-timestamp = datetime.now().strftime(
-    "%Y%m%d_%H%M%S"
-)
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 OUTPUT_FOLDER = (
     INPUT_FOLDER /
     f"MASTER_OUTPUT_{timestamp}"
 )
 
-OUTPUT_FOLDER.mkdir(
-    exist_ok=True
-)
+OUTPUT_FOLDER.mkdir(exist_ok=True)
+
+print(f"Output folder: {OUTPUT_FOLDER}")
 
 
 # ============================================================
@@ -110,72 +79,76 @@ OUTPUT_FOLDER.mkdir(
 # ============================================================
 
 master_number = 0
-
 current_master_rows = 0
 total_rows = 0
-total_files = 0
+processed_files = 0
 
 errors = []
 
 wb_out = None
 ws_out = None
+current_output_path = None
 
 
 # ============================================================
-# CREATE NEW MASTER
+# FUNCTION TO CREATE A NEW MASTER
 # ============================================================
 
-def create_new_master():
+def create_new_master(
+    old_workbook,
+    old_output_path,
+    new_master_number
+):
 
-    global master_number
-    global current_master_rows
-    global wb_out
-    global ws_out
+    # Save previous Master
+    if old_workbook is not None:
 
-    # Close previous workbook
-    if wb_out is not None:
-
-        wb_out.save(
-            current_output_path
+        print(
+            f"Saving: {old_output_path.name}"
         )
 
-        wb_out.close()
+        old_workbook.save(
+            old_output_path
+        )
 
-    master_number += 1
+        old_workbook.close()
 
-    current_master_rows = 0
 
     # New filename
     filename = (
-        f"MASTER_{master_number:03d}.xlsx"
+        f"MASTER_{new_master_number:03d}.xlsx"
     )
 
-    global current_output_path
-
-    current_output_path = (
+    new_output_path = (
         OUTPUT_FOLDER / filename
     )
 
-    print("\n" + "=" * 75)
 
-    print(
-        f"CREATING {filename}"
-    )
-
-    print("=" * 75)
-
-    # Write-only workbook
-    wb_out = Workbook(
+    # Create write-only workbook
+    new_workbook = Workbook(
         write_only=True
     )
 
-    ws_out = wb_out.create_sheet(
+    new_sheet = new_workbook.create_sheet(
         title="Master"
     )
 
+
     # Header
-    ws_out.append(
+    new_sheet.append(
         KEEP_COLUMNS + ["SOURCE"]
+    )
+
+
+    print(
+        f"\n>>> NEW MASTER: {filename}"
+    )
+
+
+    return (
+        new_workbook,
+        new_sheet,
+        new_output_path
     )
 
 
@@ -183,11 +156,19 @@ def create_new_master():
 # CREATE FIRST MASTER
 # ============================================================
 
-create_new_master()
+master_number = 1
+
+wb_out, ws_out, current_output_path = (
+    create_new_master(
+        None,
+        None,
+        master_number
+    )
+)
 
 
 # ============================================================
-# PROCESS EACH EXCEL FILE
+# PROCESS FILES
 # ============================================================
 
 for file_number, file_path in enumerate(
@@ -195,17 +176,18 @@ for file_number, file_path in enumerate(
     start=1
 ):
 
-    print("\n" + "-" * 75)
+    print("\n" + "-" * 70)
 
     print(
         f"[{file_number}/{len(files)}] "
         f"{file_path.name}"
     )
 
+
     try:
 
         # ====================================================
-        # OPEN INPUT FILE
+        # OPEN INPUT EXCEL
         # ====================================================
 
         wb_in = load_workbook(
@@ -233,9 +215,7 @@ for file_number, file_path in enumerate(
 
         except StopIteration:
 
-            print(
-                "⚠ Empty file - skipped."
-            )
+            print("⚠ Empty file")
 
             wb_in.close()
 
@@ -243,7 +223,7 @@ for file_number, file_path in enumerate(
 
 
         # ====================================================
-        # CREATE HEADER MAP
+        # MAP COLUMNS
         # ====================================================
 
         header_map = {}
@@ -254,24 +234,23 @@ for file_number, file_path in enumerate(
 
             if column is not None:
 
-                name = (
+                column_name = (
                     str(column)
                     .strip()
                     .upper()
                 )
 
-                header_map[name] = index
+                header_map[column_name] = index
 
 
         # ====================================================
-        # CHECK MISSING COLUMNS
+        # CHECK COLUMNS
         # ====================================================
 
         missing = [
-            column
-            for column in KEEP_COLUMNS
-            if column.upper()
-            not in header_map
+            col
+            for col in KEEP_COLUMNS
+            if col.upper() not in header_map
         ]
 
         if missing:
@@ -282,7 +261,7 @@ for file_number, file_path in enumerate(
 
 
         # ====================================================
-        # PROCESS ROWS
+        # COPY ROWS
         # ====================================================
 
         file_rows = 0
@@ -290,7 +269,32 @@ for file_number, file_path in enumerate(
         for row in rows:
 
             # ------------------------------------------------
-            # BUILD OUTPUT ROW
+            # If Master reaches 700,000,
+            # create a new Master.
+            # ------------------------------------------------
+
+            if (
+                current_master_rows
+                >= MAX_ROWS_PER_MASTER
+            ):
+
+                master_number += 1
+
+                current_master_rows = 0
+
+                (
+                    wb_out,
+                    ws_out,
+                    current_output_path
+                ) = create_new_master(
+                    wb_out,
+                    current_output_path,
+                    master_number
+                )
+
+
+            # ------------------------------------------------
+            # CREATE OUTPUT ROW
             # ------------------------------------------------
 
             output_row = []
@@ -316,7 +320,7 @@ for file_number, file_path in enumerate(
 
 
             # ------------------------------------------------
-            # ADD SOURCE AT THE END
+            # SOURCE
             # ------------------------------------------------
 
             output_row.append(
@@ -325,7 +329,7 @@ for file_number, file_path in enumerate(
 
 
             # ------------------------------------------------
-            # WRITE ROW
+            # WRITE
             # ------------------------------------------------
 
             ws_out.append(
@@ -337,68 +341,24 @@ for file_number, file_path in enumerate(
             file_rows += 1
 
 
-            # ------------------------------------------------
-            # IMPORTANT:
-            #
-            # We do NOT split in the middle of a source file.
-            #
-            # The current source is allowed to finish.
-            #
-            # After the file finishes, if the Master is
-            # over 700,000, the next source starts a new one.
-            # ------------------------------------------------
-
-
         wb_in.close()
 
-        total_files += 1
+        processed_files += 1
 
         print(
             f"✓ {file_rows:,} rows copied"
         )
 
         print(
-            f"Current Master rows: "
-            f"{current_master_rows:,}"
+            f"Current Master: "
+            f"{current_master_rows:,} rows"
         )
-
-
-        # ====================================================
-        # IF MASTER HAS REACHED / EXCEEDED TARGET
-        # START NEW MASTER FOR NEXT SOURCE
-        # ====================================================
-
-        if (
-            current_master_rows
-            >= MAX_ROWS_PER_MASTER
-        ):
-
-            print(
-                "\n→ Target reached."
-            )
-
-            print(
-                "→ Next source will start "
-                "a new Master."
-            )
-
-            # Save current Master
-            wb_out.save(
-                current_output_path
-            )
-
-            wb_out.close()
-
-            wb_out = None
-            ws_out = None
-
-            create_new_master()
 
 
     except Exception as error:
 
         errors.append(
-            f"{file_path.name} -> {error}"
+            f"{file_path.name}: {error}"
         )
 
         print(
@@ -407,10 +367,15 @@ for file_number, file_path in enumerate(
 
 
 # ============================================================
-# SAVE FINAL MASTER
+# SAVE LAST MASTER
 # ============================================================
 
 if wb_out is not None:
+
+    print(
+        f"\nSaving final: "
+        f"{current_output_path.name}"
+    )
 
     wb_out.save(
         current_output_path
@@ -424,38 +389,36 @@ if wb_out is not None:
 # ============================================================
 
 print("\n")
-print("=" * 75)
+print("=" * 70)
 print("MERGE FINISHED")
-print("=" * 75)
+print("=" * 70)
 
 print(
-    f"Excel files found     : "
-    f"{len(files):,}"
+    f"Excel files found     : {len(files):,}"
 )
 
 print(
-    f"Excel files processed : "
-    f"{total_files:,}"
+    f"Files processed       : {processed_files:,}"
 )
 
 print(
-    f"Master files created  : "
-    f"{master_number:,}"
+    f"Master files created  : {master_number:,}"
 )
 
 print(
-    f"Total rows copied     : "
-    f"{total_rows:,}"
+    f"Total rows copied     : {total_rows:,}"
 )
 
 print(
-    f"Errors                : "
-    f"{len(errors):,}"
+    f"Errors                : {len(errors):,}"
 )
 
 print(
-    f"\nOutput folder:\n"
-    f"{OUTPUT_FOLDER}"
+    f"\nOutput folder:"
+)
+
+print(
+    OUTPUT_FOLDER
 )
 
 
@@ -465,16 +428,11 @@ print(
 
 if errors:
 
-    print("\n" + "=" * 75)
-    print("ERRORS")
-    print("=" * 75)
+    print("\nERRORS:")
 
     for error in errors:
 
-        print(
-            " -",
-            error
-        )
+        print(" -", error)
 
 else:
 
@@ -483,17 +441,8 @@ else:
     )
 
 
-print("\n")
-print("NOTHING WAS:")
-print("✓ Deleted")
-print("✓ Deduplicated")
-print("✓ Cleaned")
-print("✓ Filtered")
-
-print("\nKept columns:")
-
-print(
-    ", ".join(KEEP_COLUMNS)
-)
-
-print("\nSOURCE = last column")
+print("\nNothing was deleted.")
+print("Nothing was deduplicated.")
+print("Nothing was cleaned.")
+print("Nothing was filtered.")
+print("SOURCE is the last column.")
