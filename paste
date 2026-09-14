@@ -1,32 +1,63 @@
 from pathlib import Path
 from openpyxl import load_workbook, Workbook
 from datetime import datetime
+import re
 
 
 # ============================================================
-# SETTINGS
+# STEP 2
+#
+# GSM + TEL1 + TEL2 + TEL3
+#             ↓
+#       TELEPHONE
+#             ↓
+# ONE TELEPHONE = ONE ROW
+#
+# OUTPUT = XLSX
+# MAXIMUM = 800,000 DATA ROWS PER FILE
 # ============================================================
 
-# CHANGE THIS
-INPUT_FOLDER = Path(r"C:\YOUR_FOLDER_HERE")
 
-# Target maximum number of DATA rows
-MAX_ROWS_PER_MASTER = 700_000
+# ============================================================
+# 1. FOLDER CONTAINING MASTER FILES
+# ============================================================
+
+# 👇 Put here the folder created by STEP 1
+INPUT_FOLDER = Path(
+    r"C:\YOUR_FOLDER_HERE\MASTER_OUTPUT_XXXXXXXX_XXXXXX"
+)
 
 
 # ============================================================
-# COLUMNS TO KEEP
+# 2. OUTPUT FOLDER
 # ============================================================
 
-KEEP_COLUMNS = [
-    "STE",
-    "TVA",
-    "NOM",
-    "ADRESSE",
-    "NUMERO",
-    "COMPLEMENT",
-    "CP",
-    "VILLE",
+timestamp = datetime.now().strftime(
+    "%Y%m%d_%H%M%S"
+)
+
+OUTPUT_FOLDER = (
+    INPUT_FOLDER.parent /
+    f"TELEPHONE_OUTPUT_{timestamp}"
+)
+
+OUTPUT_FOLDER.mkdir(
+    exist_ok=True
+)
+
+
+# ============================================================
+# 3. MAXIMUM ROWS
+# ============================================================
+
+MAX_ROWS_PER_FILE = 800_000
+
+
+# ============================================================
+# 4. PHONE COLUMNS
+# ============================================================
+
+PHONE_COLUMNS = [
     "GSM",
     "TEL1",
     "TEL2",
@@ -35,163 +66,164 @@ KEEP_COLUMNS = [
 
 
 # ============================================================
-# FIND EXCEL FILES
+# 5. OTHER COLUMNS
 # ============================================================
 
-files = sorted([
+BASE_COLUMNS = [
+    "STE",
+    "TVA",
+    "NOM",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE"
+]
+
+
+# Final structure
+FINAL_COLUMNS = (
+    BASE_COLUMNS
+    + ["TELEPHONE", "SOURCE"]
+)
+
+
+# ============================================================
+# 6. FIND MASTER FILES
+# ============================================================
+
+master_files = sorted([
     f
     for f in INPUT_FOLDER.iterdir()
     if f.is_file()
-    and f.suffix.lower() in [".xlsx", ".xlsm"]
-    and not f.name.startswith("~$")
+    and f.suffix.lower() == ".xlsx"
+    and f.name.upper().startswith("MASTER_")
 ])
 
 
-print("=" * 70)
-print("SMART EXCEL MERGE")
-print("=" * 70)
+print("=" * 75)
+print("STEP 2 - TELEPHONE SEPARATION")
+print("=" * 75)
 
-print(f"Excel files found: {len(files)}")
-
-
-if not files:
-    raise Exception("No Excel files found.")
-
-
-# ============================================================
-# OUTPUT FOLDER
-# ============================================================
-
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-OUTPUT_FOLDER = (
-    INPUT_FOLDER /
-    f"MASTER_OUTPUT_{timestamp}"
+print(
+    f"Master files found: {len(master_files)}"
 )
 
-OUTPUT_FOLDER.mkdir(exist_ok=True)
+print(
+    f"Output folder: {OUTPUT_FOLDER}"
+)
 
-print(f"Output folder: {OUTPUT_FOLDER}")
 
+if not master_files:
 
-# ============================================================
-# VARIABLES
-# ============================================================
-
-master_number = 0
-current_master_rows = 0
-total_rows = 0
-processed_files = 0
-
-errors = []
-
-wb_out = None
-ws_out = None
-current_output_path = None
+    raise Exception(
+        "No MASTER_XXX.xlsx files were found."
+    )
 
 
 # ============================================================
-# FUNCTION TO CREATE A NEW MASTER
+# FUNCTION: SAFE SOURCE NAME
 # ============================================================
 
-def create_new_master(
-    old_workbook,
-    old_output_path,
-    new_master_number
-):
+def safe_source_name(source):
 
-    # Save previous Master
-    if old_workbook is not None:
+    source = str(source)
 
-        print(
-            f"Saving: {old_output_path.name}"
-        )
+    # Remove extension
+    source = Path(source).stem
 
-        old_workbook.save(
-            old_output_path
-        )
+    # Replace characters forbidden in Windows filenames
+    source = re.sub(
+        r'[<>:"/\\|?*]',
+        "_",
+        source
+    )
 
-        old_workbook.close()
+    # Avoid excessively long filenames
+    return source[:100]
 
 
-    # New filename
+# ============================================================
+# FUNCTION: CREATE OUTPUT FILE
+# ============================================================
+
+def create_output(source, part):
+
+    safe_source = safe_source_name(
+        source
+    )
+
     filename = (
-        f"MASTER_{new_master_number:03d}.xlsx"
+        f"TELEPHONE_"
+        f"{safe_source}_"
+        f"Part{part:03d}.xlsx"
     )
 
-    new_output_path = (
-        OUTPUT_FOLDER / filename
+    output_path = (
+        OUTPUT_FOLDER /
+        filename
     )
 
-
-    # Create write-only workbook
-    new_workbook = Workbook(
+    wb = Workbook(
         write_only=True
     )
 
-    new_sheet = new_workbook.create_sheet(
-        title="Master"
+    ws = wb.create_sheet(
+        title="Telephone"
     )
-
 
     # Header
-    new_sheet.append(
-        KEEP_COLUMNS + ["SOURCE"]
+    ws.append(
+        FINAL_COLUMNS
     )
-
 
     print(
-        f"\n>>> NEW MASTER: {filename}"
+        f"    → Created: {filename}"
     )
 
-
-    return (
-        new_workbook,
-        new_sheet,
-        new_output_path
-    )
+    return wb, ws, output_path
 
 
 # ============================================================
-# CREATE FIRST MASTER
+# TOTAL COUNTERS
 # ============================================================
 
-master_number = 1
+total_master_rows = 0
+total_telephone_rows = 0
+total_output_files = 0
+total_sources = 0
 
-wb_out, ws_out, current_output_path = (
-    create_new_master(
-        None,
-        None,
-        master_number
-    )
-)
+errors = []
 
 
 # ============================================================
-# PROCESS FILES
+# PROCESS EACH MASTER
 # ============================================================
 
-for file_number, file_path in enumerate(
-    files,
+for master_number, master_path in enumerate(
+    master_files,
     start=1
 ):
 
-    print("\n" + "-" * 70)
+    print("\n")
+    print("=" * 75)
 
     print(
-        f"[{file_number}/{len(files)}] "
-        f"{file_path.name}"
+        f"[{master_number}/{len(master_files)}] "
+        f"{master_path.name}"
     )
+
+    print("=" * 75)
 
 
     try:
 
         # ====================================================
-        # OPEN INPUT EXCEL
+        # OPEN MASTER
         # ====================================================
 
         wb_in = load_workbook(
-            filename=file_path,
+            filename=master_path,
             read_only=True,
             data_only=False
         )
@@ -211,11 +243,11 @@ for file_number, file_path in enumerate(
 
         try:
 
-            original_header = next(rows)
+            header = next(rows)
 
         except StopIteration:
 
-            print("⚠ Empty file")
+            print("⚠ Empty Master - skipped.")
 
             wb_in.close()
 
@@ -223,142 +255,389 @@ for file_number, file_path in enumerate(
 
 
         # ====================================================
-        # MAP COLUMNS
+        # CREATE HEADER MAP
         # ====================================================
 
         header_map = {}
 
-        for index, column in enumerate(
-            original_header
-        ):
+        for index, column in enumerate(header):
 
             if column is not None:
 
-                column_name = (
+                name = (
                     str(column)
                     .strip()
                     .upper()
                 )
 
-                header_map[column_name] = index
+                header_map[name] = index
 
 
         # ====================================================
-        # CHECK COLUMNS
+        # CHECK REQUIRED COLUMNS
         # ====================================================
+
+        required_columns = (
+            BASE_COLUMNS
+            + PHONE_COLUMNS
+            + ["SOURCE"]
+        )
 
         missing = [
-            col
-            for col in KEEP_COLUMNS
-            if col.upper() not in header_map
+            column
+            for column in required_columns
+            if column.upper()
+            not in header_map
         ]
 
         if missing:
 
             print(
-                f"⚠ Missing columns: {missing}"
+                f"❌ Missing columns: {missing}"
             )
 
+            wb_in.close()
+
+            continue
+
 
         # ====================================================
-        # COPY ROWS
+        # OUTPUT INFORMATION
+        #
+        # Each SOURCE gets its own XLSX file.
         # ====================================================
 
-        file_rows = 0
+        source_outputs = {}
+
+
+        # ====================================================
+        # PROCESS EVERY ROW
+        # ====================================================
+
+        master_rows = 0
+
+        telephone_rows = 0
+
 
         for row in rows:
 
-            # ------------------------------------------------
-            # If Master reaches 700,000,
-            # create a new Master.
-            # ------------------------------------------------
+            master_rows += 1
+            total_master_rows += 1
 
-            if (
-                current_master_rows
-                >= MAX_ROWS_PER_MASTER
-            ):
 
-                master_number += 1
+            # =================================================
+            # SOURCE
+            # =================================================
 
-                current_master_rows = 0
+            source_index = header_map[
+                "SOURCE"
+            ]
 
-                (
-                    wb_out,
-                    ws_out,
-                    current_output_path
-                ) = create_new_master(
-                    wb_out,
-                    current_output_path,
-                    master_number
+            source = row[
+                source_index
+            ]
+
+
+            if source is None or source == "":
+
+                source = "NO_SOURCE"
+
+            else:
+
+                source = str(source)
+
+
+            # =================================================
+            # CREATE OUTPUT FOR SOURCE
+            # =================================================
+
+            if source not in source_outputs:
+
+                wb_out, ws_out, output_path = (
+                    create_output(
+                        source,
+                        1
+                    )
                 )
 
+                source_outputs[source] = {
+                    "workbook": wb_out,
+                    "sheet": ws_out,
+                    "path": output_path,
+                    "part": 1,
+                    "rows": 0
+                }
 
-            # ------------------------------------------------
-            # CREATE OUTPUT ROW
-            # ------------------------------------------------
+                total_sources += 1
 
-            output_row = []
 
-            for column in KEEP_COLUMNS:
+            info = source_outputs[
+                source
+            ]
 
-                index = header_map.get(
-                    column.upper()
-                )
 
+            # =================================================
+            # GET GSM / TEL1 / TEL2 / TEL3
+            #
+            # ORDER:
+            # GSM → TEL1 → TEL2 → TEL3
+            #
+            # NOTHING IS CLEANED.
+            # NOTHING IS DEDUPLICATED.
+            # =================================================
+
+            phones = []
+
+            for phone_column in PHONE_COLUMNS:
+
+                index = header_map[
+                    phone_column
+                ]
+
+                value = row[index]
+
+
+                # Keep non-empty values
+                if value is not None:
+
+                    if value != "":
+
+                        phones.append(value)
+
+
+            # =================================================
+            # CASE 1:
+            # NO PHONE
+            #
+            # KEEP THE ORIGINAL ROW.
+            # TELEPHONE = EMPTY
+            # =================================================
+
+            if len(phones) == 0:
+
+
+                # Check 800k limit
                 if (
-                    index is not None
-                    and index < len(row)
+                    info["rows"]
+                    >= MAX_ROWS_PER_FILE
                 ):
 
-                    value = row[index]
+                    info["workbook"].save(
+                        info["path"]
+                    )
 
-                else:
+                    info["workbook"].close()
 
-                    value = None
+                    new_part = (
+                        info["part"] + 1
+                    )
 
-                output_row.append(value)
+                    wb_out, ws_out, output_path = (
+                        create_output(
+                            source,
+                            new_part
+                        )
+                    )
+
+                    source_outputs[source] = {
+                        "workbook": wb_out,
+                        "sheet": ws_out,
+                        "path": output_path,
+                        "part": new_part,
+                        "rows": 0
+                    }
+
+                    info = source_outputs[
+                        source
+                    ]
+
+                    total_output_files += 1
 
 
-            # ------------------------------------------------
-            # SOURCE
-            # ------------------------------------------------
+                # Build row
+                output_row = []
 
-            output_row.append(
-                file_path.name
+
+                # Company information
+                for column in BASE_COLUMNS:
+
+                    index = header_map[
+                        column
+                    ]
+
+                    output_row.append(
+                        row[index]
+                    )
+
+
+                # Empty telephone
+                output_row.append("")
+
+
+                # Source
+                output_row.append(
+                    source
+                )
+
+
+                # Write
+                info["sheet"].append(
+                    output_row
+                )
+
+                info["rows"] += 1
+
+                telephone_rows += 1
+                total_telephone_rows += 1
+
+
+            # =================================================
+            # CASE 2:
+            # ONE OR MORE PHONES
+            #
+            # ONE PHONE = ONE ROW
+            # =================================================
+
+            else:
+
+                for phone in phones:
+
+
+                    # -----------------------------------------
+                    # CHECK 800,000 LIMIT
+                    # -----------------------------------------
+
+                    if (
+                        info["rows"]
+                        >= MAX_ROWS_PER_FILE
+                    ):
+
+                        # Save current part
+                        info["workbook"].save(
+                            info["path"]
+                        )
+
+                        info["workbook"].close()
+
+
+                        # New part
+                        new_part = (
+                            info["part"] + 1
+                        )
+
+                        wb_out, ws_out, output_path = (
+                            create_output(
+                                source,
+                                new_part
+                            )
+                        )
+
+                        source_outputs[source] = {
+                            "workbook": wb_out,
+                            "sheet": ws_out,
+                            "path": output_path,
+                            "part": new_part,
+                            "rows": 0
+                        }
+
+                        info = source_outputs[
+                            source
+                        ]
+
+                        total_output_files += 1
+
+
+                    # -----------------------------------------
+                    # BUILD OUTPUT ROW
+                    # -----------------------------------------
+
+                    output_row = []
+
+
+                    # Company information
+                    for column in BASE_COLUMNS:
+
+                        index = header_map[
+                            column
+                        ]
+
+                        output_row.append(
+                            row[index]
+                        )
+
+
+                    # Telephone
+                    output_row.append(
+                        phone
+                    )
+
+
+                    # Source
+                    output_row.append(
+                        source
+                    )
+
+
+                    # -----------------------------------------
+                    # WRITE
+                    # -----------------------------------------
+
+                    info["sheet"].append(
+                        output_row
+                    )
+
+                    info["rows"] += 1
+
+                    telephone_rows += 1
+                    total_telephone_rows += 1
+
+
+        # ====================================================
+        # SAVE ALL OUTPUTS FOR THIS MASTER
+        # ====================================================
+
+        for source, info in source_outputs.items():
+
+            info["workbook"].save(
+                info["path"]
             )
 
+            info["workbook"].close()
 
-            # ------------------------------------------------
-            # WRITE
-            # ------------------------------------------------
+            total_output_files += 1
 
-            ws_out.append(
-                output_row
+            print(
+                f"    ✓ {info['path'].name}"
             )
 
-            current_master_rows += 1
-            total_rows += 1
-            file_rows += 1
+            print(
+                f"      Rows: "
+                f"{info['rows']:,}"
+            )
 
 
         wb_in.close()
 
-        processed_files += 1
+
+        # ====================================================
+        # MASTER REPORT
+        # ====================================================
 
         print(
-            f"✓ {file_rows:,} rows copied"
+            f"\nMaster rows read: "
+            f"{master_rows:,}"
         )
 
         print(
-            f"Current Master: "
-            f"{current_master_rows:,} rows"
+            f"Telephone rows created: "
+            f"{telephone_rows:,}"
         )
 
 
     except Exception as error:
 
         errors.append(
-            f"{file_path.name}: {error}"
+            f"{master_path.name}: {error}"
         )
 
         print(
@@ -367,58 +646,47 @@ for file_number, file_path in enumerate(
 
 
 # ============================================================
-# SAVE LAST MASTER
-# ============================================================
-
-if wb_out is not None:
-
-    print(
-        f"\nSaving final: "
-        f"{current_output_path.name}"
-    )
-
-    wb_out.save(
-        current_output_path
-    )
-
-    wb_out.close()
-
-
-# ============================================================
 # FINAL REPORT
 # ============================================================
 
 print("\n")
-print("=" * 70)
-print("MERGE FINISHED")
-print("=" * 70)
+print("=" * 75)
+print("STEP 2 COMPLETED")
+print("=" * 75)
 
 print(
-    f"Excel files found     : {len(files):,}"
+    f"Master files processed : "
+    f"{len(master_files):,}"
 )
 
 print(
-    f"Files processed       : {processed_files:,}"
+    f"Original rows read     : "
+    f"{total_master_rows:,}"
 )
 
 print(
-    f"Master files created  : {master_number:,}"
+    f"Telephone rows created : "
+    f"{total_telephone_rows:,}"
 )
 
 print(
-    f"Total rows copied     : {total_rows:,}"
+    f"Sources processed      : "
+    f"{total_sources:,}"
 )
 
 print(
-    f"Errors                : {len(errors):,}"
+    f"XLSX files created     : "
+    f"{total_output_files:,}"
 )
 
 print(
-    f"\nOutput folder:"
+    f"Errors                 : "
+    f"{len(errors):,}"
 )
 
 print(
-    OUTPUT_FOLDER
+    f"\nOutput folder:\n"
+    f"{OUTPUT_FOLDER}"
 )
 
 
@@ -428,21 +696,32 @@ print(
 
 if errors:
 
-    print("\nERRORS:")
+    print("\n" + "=" * 75)
+    print("ERRORS")
+    print("=" * 75)
 
     for error in errors:
 
-        print(" -", error)
+        print(
+            " -",
+            error
+        )
 
 else:
 
     print(
-        "\n✓ ALL FILES PROCESSED SUCCESSFULLY"
+        "\n✓ ALL MASTER FILES PROCESSED"
     )
 
 
-print("\nNothing was deleted.")
-print("Nothing was deduplicated.")
-print("Nothing was cleaned.")
-print("Nothing was filtered.")
-print("SOURCE is the last column.")
+print("\n")
+print("✓ GSM + TEL1 + TEL2 + TEL3 → TELEPHONE")
+print("✓ One telephone per row")
+print("✓ No duplicates removed")
+print("✓ No cleaning")
+print("✓ No validation")
+print("✓ No filtering")
+print("✓ Empty-phone rows preserved")
+print("✓ SOURCE preserved")
+print("✓ XLSX output")
+print("✓ Maximum 800,000 data rows per file")
