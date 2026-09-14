@@ -1,24 +1,56 @@
 from pathlib import Path
-from openpyxl import load_workbook
+import pandas as pd
 import csv
-from datetime import datetime
+import re
 
 # ============================================================
-# STEP 1 — MERGE EXCEL FILES INTO MASTER CSV
+# STEP 2
+# MASTER CSV
+#      ↓
+# GSM + TEL1 + TEL2 + TEL3
+#      ↓
+# ONE TELEPHONE PER ROW
+#      ↓
+# SEPARATE OUTPUT FILES BY SOURCE
+#
+# NOTHING IS DELETED:
+# - No duplicates removed
+# - No phone cleaning
+# - No phone validation
+# - No filtering
+# - Empty values are preserved
 # ============================================================
 
-# 👇 CHANGE THIS TO YOUR FOLDER
-INPUT_FOLDER = Path(r"C:\YOUR_FOLDER_HERE")
-
-# Output
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT_FILE = INPUT_FOLDER / f"MASTER_{timestamp}.csv"
 
 # ============================================================
-# COLUMNS WE WANT TO KEEP
+# 1. SELECT YOUR MASTER CSV
 # ============================================================
 
-KEEP_COLUMNS = [
+MASTER_FILE = Path(
+    r"C:\YOUR_FOLDER_HERE\MASTER_XXXXXXXX_XXXXXX.csv"
+)
+
+
+# ============================================================
+# 2. OUTPUT FOLDER
+# ============================================================
+
+OUTPUT_FOLDER = MASTER_FILE.parent / "TELEPHONE_OUTPUT"
+OUTPUT_FOLDER.mkdir(exist_ok=True)
+
+
+# ============================================================
+# 3. COLUMNS
+# ============================================================
+
+PHONE_COLUMNS = [
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3"
+]
+
+BASE_COLUMNS = [
     "STE",
     "TVA",
     "NOM",
@@ -26,169 +58,350 @@ KEEP_COLUMNS = [
     "NUMERO",
     "COMPLEMENT",
     "CP",
-    "VILLE",
-    "GSM",
-    "TEL1",
-    "TEL2",
-    "TEL3"
+    "VILLE"
 ]
 
-# ============================================================
-# FIND EXCEL FILES
-# ============================================================
+FINAL_COLUMNS = BASE_COLUMNS + [
+    "TELEPHONE",
+    "SOURCE"
+]
 
-files = sorted([
-    f for f in INPUT_FOLDER.iterdir()
-    if f.is_file()
-    and f.suffix.lower() in [".xlsx", ".xlsm"]
-    and not f.name.startswith("~$")
-])
-
-print("=" * 70)
-print("STEP 1 - MASTER CSV")
-print("=" * 70)
-
-print(f"Excel files found: {len(files)}")
-
-if not files:
-    raise Exception("No Excel files found.")
-
-total_rows = 0
-processed_files = 0
-errors = []
 
 # ============================================================
-# CREATE MASTER CSV
+# 4. MAXIMUM ROWS PER OUTPUT FILE
+#
+# Excel maximum = 1,048,576 rows
+#
+# We use 1,000,000 to leave a safety margin.
 # ============================================================
 
-with open(
-    OUTPUT_FILE,
-    "w",
-    newline="",
+MAX_ROWS_PER_FILE = 1_000_000
+
+
+# ============================================================
+# 5. READ MASTER CSV IN CHUNKS
+# ============================================================
+
+CHUNK_SIZE = 100_000
+
+
+print("=" * 75)
+print("STEP 2 - TELEPHONE SEPARATION")
+print("=" * 75)
+
+print(f"Master file: {MASTER_FILE}")
+print(f"Output folder: {OUTPUT_FOLDER}")
+print()
+
+
+# ============================================================
+# SOURCE FILE HANDLES
+# ============================================================
+
+current_source = None
+current_part = 1
+current_rows = 0
+current_writer = None
+current_file_handle = None
+
+source_file_number = 0
+
+total_input_rows = 0
+total_output_rows = 0
+total_files_created = 0
+
+
+# ============================================================
+# FUNCTION: MAKE SAFE FILE NAME
+# ============================================================
+
+def safe_filename(name):
+
+    name = str(name)
+
+    # Remove extension
+    name = Path(name).stem
+
+    # Replace characters that Windows doesn't like
+    name = re.sub(r'[<>:"/\\|?*]', '_', name)
+
+    # Avoid extremely long names
+    name = name[:120]
+
+    return name
+
+
+# ============================================================
+# FUNCTION: CLOSE CURRENT OUTPUT
+# ============================================================
+
+def close_output():
+
+    global current_writer
+    global current_file_handle
+
+    if current_file_handle is not None:
+
+        current_file_handle.close()
+
+        current_file_handle = None
+        current_writer = None
+
+
+# ============================================================
+# FUNCTION: OPEN NEW OUTPUT FILE
+# ============================================================
+
+def open_output(source, part):
+
+    global current_writer
+    global current_file_handle
+    global total_files_created
+
+    safe_source = safe_filename(source)
+
+    filename = (
+        f"TELEPHONE_{safe_source}_Part{part:03d}.csv"
+    )
+
+    output_path = OUTPUT_FOLDER / filename
+
+    current_file_handle = open(
+        output_path,
+        "w",
+        newline="",
+        encoding="utf-8-sig"
+    )
+
+    current_writer = csv.writer(
+        current_file_handle
+    )
+
+    # Header
+    current_writer.writerow(FINAL_COLUMNS)
+
+    total_files_created += 1
+
+    print(f"\nCreated: {filename}")
+
+    return output_path
+
+
+# ============================================================
+# READ MASTER
+# ============================================================
+
+for chunk in pd.read_csv(
+    MASTER_FILE,
+    dtype=str,
+    keep_default_na=False,
+    chunksize=CHUNK_SIZE,
     encoding="utf-8-sig"
-) as output:
+):
 
-    writer = csv.writer(output)
+    # --------------------------------------------------------
+    # Make sure required columns exist
+    # --------------------------------------------------------
 
-    # Write final header
-    writer.writerow(KEEP_COLUMNS + ["SOURCE"])
+    missing = [
+        col
+        for col in PHONE_COLUMNS
+        if col not in chunk.columns
+    ]
+
+    if missing:
+
+        close_output()
+
+        raise Exception(
+            f"Missing phone columns: {missing}"
+        )
+
+
+    if "SOURCE" not in chunk.columns:
+
+        close_output()
+
+        raise Exception(
+            "SOURCE column is missing from the Master CSV."
+        )
+
+
+    total_input_rows += len(chunk)
+
 
     # ========================================================
-    # PROCESS FILES ONE BY ONE
+    # PROCESS EACH ORIGINAL ROW
     # ========================================================
 
-    for number, file_path in enumerate(files, start=1):
+    for _, row in chunk.iterrows():
 
-        print(f"\n[{number}/{len(files)}] {file_path.name}")
+        source = row["SOURCE"]
 
-        try:
 
-            wb = load_workbook(
-                filename=file_path,
-                read_only=True,
-                data_only=False
+        # ----------------------------------------------------
+        # SOURCE CHANGED
+        # ----------------------------------------------------
+
+        if source != current_source:
+
+            close_output()
+
+            current_source = source
+            current_part = 1
+            current_rows = 0
+
+            source_file_number += 1
+
+            print(
+                f"\nProcessing source "
+                f"{source_file_number}: {source}"
             )
 
-            ws = wb[wb.sheetnames[0]]
 
-            rows = ws.iter_rows(values_only=True)
+        # ----------------------------------------------------
+        # GET THE FOUR PHONE CELLS
+        #
+        # IMPORTANT:
+        # We DO NOT split a cell.
+        #
+        # If GSM contains "047111/048222",
+        # it stays exactly as "047111/048222".
+        # ----------------------------------------------------
 
-            # ------------------------------------------------
-            # Read header
-            # ------------------------------------------------
+        phones = []
 
-            original_header = next(rows)
+        for phone_column in PHONE_COLUMNS:
 
-            # Normalize header names
-            header_map = {}
+            value = row[phone_column]
 
-            for index, column in enumerate(original_header):
+            if value != "":
+                phones.append(value)
 
-                if column is not None:
 
-                    name = str(column).strip().upper()
+        # ----------------------------------------------------
+        # IF THERE ARE PHONES
+        # ONE PHONE = ONE ROW
+        # ----------------------------------------------------
 
-                    header_map[name] = index
+        if phones:
 
-            # ------------------------------------------------
-            # Check required columns
-            # ------------------------------------------------
+            for phone in phones:
 
-            missing = [
-                col for col in KEEP_COLUMNS
-                if col.upper() not in header_map
+                # Need another file?
+                if current_rows >= MAX_ROWS_PER_FILE:
+
+                    close_output()
+
+                    current_part += 1
+                    current_rows = 0
+
+                # Open first/new file
+                if current_writer is None:
+
+                    open_output(
+                        current_source,
+                        current_part
+                    )
+
+                output_row = [
+                    row.get("STE", ""),
+                    row.get("TVA", ""),
+                    row.get("NOM", ""),
+                    row.get("ADRESSE", ""),
+                    row.get("NUMERO", ""),
+                    row.get("COMPLEMENT", ""),
+                    row.get("CP", ""),
+                    row.get("VILLE", ""),
+                    phone,
+                    source
+                ]
+
+                current_writer.writerow(output_row)
+
+                current_rows += 1
+                total_output_rows += 1
+
+
+        # ----------------------------------------------------
+        # NO PHONE AT ALL
+        #
+        # WE KEEP THE ORIGINAL ROW.
+        # TELEPHONE IS EMPTY.
+        #
+        # This ensures that NOTHING is deleted.
+        # ----------------------------------------------------
+
+        else:
+
+            if current_rows >= MAX_ROWS_PER_FILE:
+
+                close_output()
+
+                current_part += 1
+                current_rows = 0
+
+            if current_writer is None:
+
+                open_output(
+                    current_source,
+                    current_part
+                )
+
+            output_row = [
+                row.get("STE", ""),
+                row.get("TVA", ""),
+                row.get("NOM", ""),
+                row.get("ADRESSE", ""),
+                row.get("NUMERO", ""),
+                row.get("COMPLEMENT", ""),
+                row.get("CP", ""),
+                row.get("VILLE", ""),
+                "",
+                source
             ]
 
-            if missing:
+            current_writer.writerow(output_row)
 
-                print(f"    ⚠ Missing columns: {missing}")
+            current_rows += 1
+            total_output_rows += 1
 
-            # ------------------------------------------------
-            # Read every row
-            # ------------------------------------------------
 
-            file_rows = 0
+# ============================================================
+# CLOSE FINAL FILE
+# ============================================================
 
-            for row in rows:
+close_output()
 
-                output_row = []
-
-                for column in KEEP_COLUMNS:
-
-                    index = header_map.get(column.upper())
-
-                    if index is not None and index < len(row):
-                        value = row[index]
-                    else:
-                        value = None
-
-                    output_row.append(value)
-
-                # SOURCE is always the LAST column
-                output_row.append(file_path.name)
-
-                writer.writerow(output_row)
-
-                file_rows += 1
-                total_rows += 1
-
-            wb.close()
-
-            processed_files += 1
-
-            print(f"    ✓ Rows written: {file_rows:,}")
-
-        except Exception as e:
-
-            errors.append(
-                f"{file_path.name} -> {str(e)}"
-            )
-
-            print(f"    ❌ ERROR: {e}")
 
 # ============================================================
 # FINAL REPORT
 # ============================================================
 
-print("\n" + "=" * 70)
-print("STEP 1 FINISHED")
-print("=" * 70)
+print("\n")
+print("=" * 75)
+print("STEP 2 FINISHED")
+print("=" * 75)
 
-print(f"Files found      : {len(files):,}")
-print(f"Files processed  : {processed_files:,}")
-print(f"Files with error : {len(errors):,}")
-print(f"Total rows       : {total_rows:,}")
+print(
+    f"Original Master rows : {total_input_rows:,}"
+)
 
-print("\nMASTER FILE:")
-print(OUTPUT_FILE)
+print(
+    f"Final telephone rows : {total_output_rows:,}"
+)
 
-if errors:
+print(
+    f"Output files created : {total_files_created:,}"
+)
 
-    print("\nERRORS:")
+print(
+    f"\nOutput folder:\n{OUTPUT_FOLDER}"
+)
 
-    for error in errors:
-        print(" -", error)
-
-else:
-
-    print("\n✓ ALL FILES PROCESSED SUCCESSFULLY")
+print("\n✓ TELEPHONE SEPARATION COMPLETED")
+print("✓ No duplicates removed")
+print("✓ No phone numbers cleaned")
+print("✓ No phone numbers validated")
+print("✓ Empty-phone rows preserved")
+print("✓ Files split to remain Excel-readable")
