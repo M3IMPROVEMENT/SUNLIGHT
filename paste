@@ -1,96 +1,194 @@
-import pandas as pd
 from pathlib import Path
+from openpyxl import load_workbook
+import csv
 from datetime import datetime
 
 # ============================================================
-# STEP 1 — MERGE ALL EXCEL FILES INTO ONE MASTER CSV
-# NOTHING IS DELETED OR CLEANED
+# STEP 1 — MERGE EXCEL FILES INTO MASTER CSV
 # ============================================================
 
-# 📁 Folder containing your Excel files
+# 👇 CHANGE THIS TO YOUR FOLDER
 INPUT_FOLDER = Path(r"C:\YOUR_FOLDER_HERE")
 
-# 📄 Output file
+# Output
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT_FILE = INPUT_FOLDER / f"MASTER_MERGED_{timestamp}.csv"
+OUTPUT_FILE = INPUT_FOLDER / f"MASTER_{timestamp}.csv"
 
-# Excel extensions to read
-EXCEL_EXTENSIONS = {".xlsx", ".xls", ".xlsm"}
+# ============================================================
+# COLUMNS WE WANT TO KEEP
+# ============================================================
 
-# Find all Excel files
-files = [
-    f for f in INPUT_FOLDER.rglob("*")
-    if f.is_file()
-    and f.suffix.lower() in EXCEL_EXTENSIONS
-    and not f.name.startswith("~$")
+KEEP_COLUMNS = [
+    "STE",
+    "TVA",
+    "NOM",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE",
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3"
 ]
+
+# ============================================================
+# FIND EXCEL FILES
+# ============================================================
+
+files = sorted([
+    f for f in INPUT_FOLDER.iterdir()
+    if f.is_file()
+    and f.suffix.lower() in [".xlsx", ".xlsm"]
+    and not f.name.startswith("~$")
+])
+
+print("=" * 70)
+print("STEP 1 - MASTER CSV")
+print("=" * 70)
 
 print(f"Excel files found: {len(files)}")
 
 if not files:
-    raise FileNotFoundError("No Excel files were found in the selected folder.")
+    raise Exception("No Excel files found.")
 
-# ------------------------------------------------------------
-# Read files one by one and write directly to CSV
-# This avoids creating one enormous DataFrame in memory.
-# ------------------------------------------------------------
-
-first_file = True
 total_rows = 0
-successful_files = 0
-failed_files = []
+processed_files = 0
+errors = []
 
-for i, file in enumerate(files, start=1):
+# ============================================================
+# CREATE MASTER CSV
+# ============================================================
 
-    print(f"[{i}/{len(files)}] Reading: {file.name}")
+with open(
+    OUTPUT_FILE,
+    "w",
+    newline="",
+    encoding="utf-8-sig"
+) as output:
 
-    try:
-        # Read the Excel file exactly as it is
-        df = pd.read_excel(file, dtype=object)
+    writer = csv.writer(output)
 
-        # Keep EVERYTHING from the file
-        rows = len(df)
-        total_rows += rows
+    # Write final header
+    writer.writerow(KEEP_COLUMNS + ["SOURCE"])
 
-        # Add source file information
-        # This does NOT delete or modify your original columns.
-        df["SOURCE_FILE"] = file.name
+    # ========================================================
+    # PROCESS FILES ONE BY ONE
+    # ========================================================
 
-        # Write to CSV
-        df.to_csv(
-            OUTPUT_FILE,
-            mode="w" if first_file else "a",
-            header=first_file,
-            index=False,
-            encoding="utf-8-sig"
-        )
+    for number, file_path in enumerate(files, start=1):
 
-        first_file = False
-        successful_files += 1
+        print(f"\n[{number}/{len(files)}] {file_path.name}")
 
-        print(f"    ✓ {rows:,} rows")
+        try:
 
-    except Exception as e:
-        failed_files.append((file.name, str(e)))
-        print(f"    ❌ ERROR: {e}")
+            wb = load_workbook(
+                filename=file_path,
+                read_only=True,
+                data_only=False
+            )
+
+            ws = wb[wb.sheetnames[0]]
+
+            rows = ws.iter_rows(values_only=True)
+
+            # ------------------------------------------------
+            # Read header
+            # ------------------------------------------------
+
+            original_header = next(rows)
+
+            # Normalize header names
+            header_map = {}
+
+            for index, column in enumerate(original_header):
+
+                if column is not None:
+
+                    name = str(column).strip().upper()
+
+                    header_map[name] = index
+
+            # ------------------------------------------------
+            # Check required columns
+            # ------------------------------------------------
+
+            missing = [
+                col for col in KEEP_COLUMNS
+                if col.upper() not in header_map
+            ]
+
+            if missing:
+
+                print(f"    ⚠ Missing columns: {missing}")
+
+            # ------------------------------------------------
+            # Read every row
+            # ------------------------------------------------
+
+            file_rows = 0
+
+            for row in rows:
+
+                output_row = []
+
+                for column in KEEP_COLUMNS:
+
+                    index = header_map.get(column.upper())
+
+                    if index is not None and index < len(row):
+                        value = row[index]
+                    else:
+                        value = None
+
+                    output_row.append(value)
+
+                # SOURCE is always the LAST column
+                output_row.append(file_path.name)
+
+                writer.writerow(output_row)
+
+                file_rows += 1
+                total_rows += 1
+
+            wb.close()
+
+            processed_files += 1
+
+            print(f"    ✓ Rows written: {file_rows:,}")
+
+        except Exception as e:
+
+            errors.append(
+                f"{file_path.name} -> {str(e)}"
+            )
+
+            print(f"    ❌ ERROR: {e}")
 
 # ============================================================
 # FINAL REPORT
 # ============================================================
 
-print("\n" + "=" * 60)
-print("MERGE FINISHED")
-print("=" * 60)
+print("\n" + "=" * 70)
+print("STEP 1 FINISHED")
+print("=" * 70)
 
-print(f"Files found       : {len(files):,}")
-print(f"Files processed   : {successful_files:,}")
-print(f"Files with errors : {len(failed_files):,}")
-print(f"Total rows        : {total_rows:,}")
-print(f"\nMaster file       : {OUTPUT_FILE}")
+print(f"Files found      : {len(files):,}")
+print(f"Files processed  : {processed_files:,}")
+print(f"Files with error : {len(errors):,}")
+print(f"Total rows       : {total_rows:,}")
 
-if failed_files:
-    print("\nFILES WITH ERRORS:")
-    for filename, error in failed_files:
-        print(f" - {filename}: {error}")
+print("\nMASTER FILE:")
+print(OUTPUT_FILE)
+
+if errors:
+
+    print("\nERRORS:")
+
+    for error in errors:
+        print(" -", error)
+
 else:
-    print("\n✓ All Excel files were successfully merged.")
+
+    print("\n✓ ALL FILES PROCESSED SUCCESSFULLY")
