@@ -18,12 +18,22 @@ all_data = []
 files = glob.glob(os.path.join(folder_path, "*.xlsx"))
 
 for file in files:
+
+    # Don't read the output file again
+    if os.path.basename(file) == "master_final_table.xlsx":
+        continue
+
     print("Reading:", os.path.basename(file))
 
     df = pd.read_excel(file)
 
     # Clean column names
-    df.columns = df.columns.astype(str).str.strip().str.upper()
+    df.columns = (
+        df.columns
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
 
     # Keep only existing required columns
     df = df[[col for col in final_columns if col in df.columns]]
@@ -48,22 +58,15 @@ for file in files:
 # Merge all files
 master = pd.concat(all_data, ignore_index=True)
 
-# ==========================
-# CLEAN AND CHECK CP
-# ==========================
+# Save ONE output file
+output_file = os.path.join(
+    folder_path,
+    "master_final_table.xlsx"
+)
 
-
-
-# Split files
-master_clean = master[valid_mask].copy()
-
-
-# ==========================l
-# SAVE FILES
-# ==========================
-
-master_clean.to_excel("master_final_table.xlsx", index=False)
-
+master.to_excel(output_file, index=False)
 
 print("\nDONE")
-print("Rows in master:", len(master_clean))
+print("Files merged:", len(all_data))
+print("Rows in master:", len(master))
+print("Output:", output_file)
