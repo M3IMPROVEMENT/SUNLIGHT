@@ -1,11 +1,232 @@
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import (
+    col,
+    regexp_replace,
+    trim,
+    collect_set,
+    concat_ws
+)
+
+# ============================================================
+# START SPARK
+# ============================================================
 
 spark = (
     SparkSession.builder
     .master("local[*]")
-    .appName("KBO_TEST")
+    .appName("KBO_FULL_MERGE")
     .getOrCreate()
 )
 
-print("Spark is working!")
-print("Spark version:", spark.version)
+spark.sparkContext.setLogLevel("WARN")
+
+
+# ============================================================
+# KBO FOLDER
+# ============================================================
+
+DATA_DIR = r"C:\Users\Sunlight\Downloads\KBO_0485_WORK\data"
+
+
+# ============================================================
+# FILES
+# ============================================================
+
+files = [
+    "enterprise.csv",
+    "denomination.csv",
+    "address.csv",
+    "contact.csv",
+    "activity.csv",
+    "branch.csv",
+    "establishment.csv"
+]
+
+
+# ============================================================
+# READ + CREATE COMMON KBO KEY
+# ============================================================
+
+tables = {}
+
+for filename in files:
+
+    path = DATA_DIR + "\\" + filename
+
+    print("Reading:", filename)
+
+    df = (
+        spark.read
+        .option("header", True)
+        .option("inferSchema", False)
+        .option("encoding", "UTF-8")
+        .csv(path)
+    )
+
+    # --------------------------------------------------------
+    # Find EnterpriseNumber or EntityNumber
+    # --------------------------------------------------------
+
+    if "EnterpriseNumber" in df.columns:
+
+        df = df.withColumn(
+            "KBO_KEY",
+            regexp_replace(
+                trim(col("EnterpriseNumber")),
+                "[^0-9]",
+                ""
+            )
+        )
+
+    elif "EntityNumber" in df.columns:
+
+        df = df.withColumn(
+            "KBO_KEY",
+            regexp_replace(
+                trim(col("EntityNumber")),
+                "[^0-9]",
+                ""
+            )
+        )
+
+    else:
+
+        print("SKIPPED - no EnterpriseNumber/EntityNumber:",
+              filename)
+
+        continue
+
+    tables[filename] = df
+
+    print("Rows:", df.count())
+    print("Columns:", len(df.columns))
+    print()
+
+
+# ============================================================
+# START WITH ENTERPRISE
+# ============================================================
+
+result = tables["enterprise.csv"]
+
+
+# ============================================================
+# REMOVE ORIGINAL ENTERPRISE NUMBER
+# KEEP KBO_KEY
+# ============================================================
+
+if "EnterpriseNumber" in result.columns:
+
+    result = result.drop("EnterpriseNumber")
+
+
+# ============================================================
+# MERGE OTHER TABLES
+# ============================================================
+
+for filename, df in tables.items():
+
+    if filename == "enterprise.csv":
+        continue
+
+    print("Processing:", filename)
+
+    # --------------------------------------------------------
+    # Remove original key
+    # --------------------------------------------------------
+
+    if "EnterpriseNumber" in df.columns:
+        df = df.drop("EnterpriseNumber")
+
+    if "EntityNumber" in df.columns:
+        df = df.drop("EntityNumber")
+
+    # --------------------------------------------------------
+    # Rename every column so there are no collisions
+    # --------------------------------------------------------
+
+    prefix = filename.replace(".csv", "")
+
+    for c in df.columns:
+
+        if c != "KBO_KEY":
+
+            df = df.withColumnRenamed(
+                c,
+                f"{prefix}_{c}"
+            )
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    # One enterprise can have MANY records.
+    #
+    # We aggregate them BEFORE joining.
+    # This prevents:
+    #
+    # 1 company × 5 contacts × 10 activities
+    #
+    # becoming 50 rows.
+    # --------------------------------------------------------
+
+    value_columns = [
+        c for c in df.columns
+        if c != "KBO_KEY"
+    ]
+
+    aggregated = df.groupBy("KBO_KEY").agg(
+        *[
+            concat_ws(
+                " | ",
+                collect_set(
+                    col(c).cast("string")
+                )
+            ).alias(c)
+            for c in value_columns
+        ]
+    )
+
+    # --------------------------------------------------------
+    # LEFT JOIN
+    # --------------------------------------------------------
+
+    result = result.join(
+        aggregated,
+        on="KBO_KEY",
+        how="left"
+    )
+
+
+# ============================================================
+# SHOW RESULT
+# ============================================================
+
+print()
+print("=" * 70)
+print("MERGE FINISHED")
+print("=" * 70)
+
+print("Number of companies:", result.count())
+
+print()
+print("Number of columns:", len(result.columns))
+
+print()
+print("Columns:")
+
+for c in result.columns:
+    print(c)
+
+
+# ============================================================
+# SAVE AS PARQUET
+# ============================================================
+
+OUTPUT = r"C:\Users\Sunlight\Downloads\KBO_MERGED_PARQUET"
+
+result.write \
+    .mode("overwrite") \
+    .parquet(OUTPUT)
+
+print()
+print("Saved:")
+print(OUTPUT)
