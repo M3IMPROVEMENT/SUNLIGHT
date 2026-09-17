@@ -1,405 +1,158 @@
-import os
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, regexp_replace, trim
-
-# ============================================================
-# 1. START SPARK
-# ============================================================
-
-spark = (
-    SparkSession.builder
-    .master("local[*]")
-    .appName("KBO_REAL_JOIN_TO_EXCEL")
-    .getOrCreate()
-)
-
-spark.sparkContext.setLogLevel("WARN")
-
-# ============================================================
-# 2. PATHS
-# ============================================================
-
-DATA_DIR = r"C:\Users\Sunlight\Downloads\KBO_0485_WORK\data"
-
-OUTPUT_DIR = r"C:\Users\Sunlight\Desktop\17-09-26\KBO_FINAL_EXCEL"
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# ============================================================
-# 3. FILES TO JOIN
-# ============================================================
-
-FILES = [
-    "enterprise.csv",
-    "denomination.csv",
-    "address.csv",
-    "contact.csv",
-    "activity.csv",
-    "branch.csv",
-    "establishment.csv"
-]
-
-# 500,000 data rows per Excel file
-ROWS_PER_EXCEL = 500_000
-
-
-# ============================================================
-# 4. FUNCTION: READ KBO FILE
-# ============================================================
-
-def read_kbo(filename):
-
-    path = os.path.join(DATA_DIR, filename)
-
-    print("=" * 70)
-    print("READING:", filename)
-
-    df = (
-        spark.read
-        .option("header", True)
-        .option("inferSchema", False)
-        .option("encoding", "UTF-8")
-        .csv(path)
-    )
-
-    print("Columns:", len(df.columns))
-
-    # Find enterprise/entity number
-    if "EnterpriseNumber" in df.columns:
-
-        key_column = "EnterpriseNumber"
-
-    elif "EntityNumber" in df.columns:
-
-        key_column = "EntityNumber"
-
-    else:
-
-        raise ValueError(
-            f"{filename} does not contain EnterpriseNumber or EntityNumber"
-        )
-
-    # --------------------------------------------------------
-    # Create common KBO_KEY
-    # --------------------------------------------------------
-
-    df = df.withColumn(
-        "KBO_KEY",
-        regexp_replace(
-            trim(col(key_column)),
-            "[^0-9]",
-            ""
-        )
-    )
-
-    print("Key:", key_column)
-
-    return df
-
-
-# ============================================================
-# 5. READ ENTERPRISE
-# ============================================================
-
-enterprise = read_kbo("enterprise.csv")
-
-
-# ============================================================
-# 6. RENAME COLUMNS TO AVOID COLLISIONS
-# ============================================================
-
-def prepare_for_join(df, source_name):
-
-    new_columns = []
-
-    for c in df.columns:
-
-        if c == "KBO_KEY":
-
-            new_columns.append(col(c))
-
-        else:
-
-            # Keep the original column name but prefix it
-            # with the source table.
-            new_columns.append(
-                col(c).alias(f"{source_name}_{c}")
-            )
-
-    return df.select(*new_columns)
-
-
-enterprise = prepare_for_join(
-    enterprise,
-    "enterprise"
-)
-
-
-# ============================================================
-# 7. REAL JOIN FUNCTION
-# ============================================================
-
-def join_table(current_df, filename):
-
-    print()
-    print("=" * 70)
-    print("JOINING:", filename)
-    print("=" * 70)
-
-    df = read_kbo(filename)
-
-    source_name = os.path.splitext(filename)[0]
-
-    df = prepare_for_join(
-        df,
-        source_name
-    )
-
-    # --------------------------------------------------------
-    # REAL JOIN ON KBO_KEY
-    # --------------------------------------------------------
-
-    joined = current_df.join(
-        df,
-        on="KBO_KEY",
-        how="left"
-    )
-
-    print("JOINED:", filename)
-
-    return joined
-
-
-# ============================================================
-# 8. JOIN EVERYTHING
-# ============================================================
-
-result = enterprise
-
-for filename in FILES[1:]:
-
-    result = join_table(
-        result,
-        filename
-    )
-
-
-# ============================================================
-# 9. SHOW FINAL STRUCTURE
-# ============================================================
-
-print()
-print("=" * 70)
-print("ALL TABLES JOINED")
-print("=" * 70)
-
-print("Number of columns:", len(result.columns))
-
-print("Columns:")
-
-for c in result.columns:
-    print(" -", c)
-
-
-# ============================================================
-# 10. COUNT FINAL ROWS
-# ============================================================
-
-print()
-print("=" * 70)
-print("COUNTING FINAL JOINED ROWS")
-print("=" * 70)
-
-total_rows = result.count()
-
-print("FINAL ROWS:", total_rows)
-
-
-# ============================================================
-# 11. CALCULATE NUMBER OF EXCEL FILES
-# ============================================================
-
-number_of_excel_files = (
-    total_rows + ROWS_PER_EXCEL - 1
-) // ROWS_PER_EXCEL
-
-print(
-    "EXCEL FILES NEEDED:",
-    number_of_excel_files
-)
-
-
-# ============================================================
-# 12. ADD ROW ID
-# ============================================================
-
-from pyspark.sql.functions import monotonically_increasing_id
-
-result = result.withColumn(
-    "_ROW_ID",
-    monotonically_increasing_id()
-)
-
-
-# ============================================================
-# 13. REPARTITION
-# ============================================================
-
-# Use more partitions than Excel files so Spark can work
-# in parallel.
-
-num_partitions = max(
-    number_of_excel_files * 2,
-    100
-)
-
-result = result.repartition(
-    num_partitions
-)
-
-
-# ============================================================
-# 14. WRITE EXCEL
-# ============================================================
-
-print()
-print("=" * 70)
-print("STARTING EXCEL WRITING")
-print("=" * 70)
-
-from openpyxl import Workbook
-
-
-columns = [
-    c
-    for c in result.columns
-    if c != "_ROW_ID"
-]
-
-
-def write_partition(partition_index, iterator):
-
-    from openpyxl import Workbook
-    import os
-
-    # --------------------------------------------------------
-    # One partition can contain many Excel files.
-    # We split every 500,000 rows.
-    # --------------------------------------------------------
-
-    excel_number = 0
-    row_number = 0
-
-    workbook = None
-    worksheet = None
-    output_file = None
-
-    def start_new_workbook():
-
-        nonlocal workbook
-        nonlocal worksheet
-        nonlocal output_file
-        nonlocal excel_number
-        nonlocal row_number
-
-        if workbook is not None:
-
-            workbook.save(output_file)
-            workbook.close()
-
-        excel_number += 1
-
-        output_file = os.path.join(
-            OUTPUT_DIR,
-            f"KBO_JOIN_part_{partition_index:03d}_{excel_number:03d}.xlsx"
-        )
-
-        workbook = Workbook(
-            write_only=True
-        )
-
-        worksheet = workbook.create_sheet(
-            "KBO"
-        )
-
-        worksheet.append(columns)
-
-        row_number = 0
-
-    # --------------------------------------------------------
-    # Process rows
-    # --------------------------------------------------------
-
-    for row in iterator:
-
-        # Start first workbook
-        if workbook is None:
-
-            start_new_workbook()
-
-        # If current Excel reached 500k rows,
-        # create another one.
-        if row_number >= ROWS_PER_EXCEL:
-
-            start_new_workbook()
-
-        values = []
-
-        for c in columns:
-
-            value = row[c]
-
-            if value is None:
-                value = ""
-
-            values.append(
-                str(value)
-            )
-
-        worksheet.append(values)
-
-        row_number += 1
-
-    # --------------------------------------------------------
-    # Save last workbook
-    # --------------------------------------------------------
-
-    if workbook is not None:
-
-        workbook.save(output_file)
-        workbook.close()
-
-    return iter([1])
-
-
-# ============================================================
-# 15. EXECUTE
-# ============================================================
-
-(
-    result
-    .rdd
-    .mapPartitionsWithIndex(write_partition)
-    .count()
-)
-
-
-# ============================================================
-# 16. FINISHED
-# ============================================================
-
-print()
-print("=" * 70)
-print("KBO JOIN FINISHED")
-print("=" * 70)
-
-print("Output folder:")
-print(OUTPUT_DIR)
-
-print()
-print("FINAL ROWS:", total_rows)
-
-print(
-    "Excel files requested:",
-    number_of_excel_files
-)
+---------------------------------------------------------------------------
+Py4JJavaError                             Traceback (most recent call last)
+Cell In[3], line 381
+    377 # ============================================================
+    378 
+    379 (
+    380     result
+--> 381     .rdd
+    382     .mapPartitionsWithIndex(write_partition)
+    383     .count()
+    384 )
+
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\functools.py:1126, in cached_property.__get__(self, instance, owner)
+   1124 val = cache.get(self.attrname, _NOT_FOUND)
+   1125 if val is _NOT_FOUND:
+-> 1126     val = self.func(instance)
+   1127     try:
+   1128         cache[self.attrname] = val
+
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pyspark\sql\classic\dataframe.py:159, in DataFrame.rdd(self)
+    155 @cached_property
+    156 def rdd(self) -> "RDD[Row]":
+    157     from pyspark.core.rdd import RDD
+--> 159     jrdd = self._jdf.javaToPython()
+    160     return RDD(jrdd, self.sparkSession._sc, BatchedSerializer(CPickleSerializer()))
+
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\py4j\java_gateway.py:1362, in JavaMember.__call__(self, *args)
+   1356 command = proto.CALL_COMMAND_NAME +\
+   1357     self.command_header +\
+   1358     args_command +\
+   1359     proto.END_COMMAND_PART
+   1361 answer = self.gateway_client.send_command(command)
+-> 1362 return_value = get_return_value(
+   1363     answer, self.gateway_client, self.target_id, self.name)
+   1365 for temp_arg in temp_args:
+   1366     if hasattr(temp_arg, "_detach"):
+
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pyspark\errors\exceptions\captured.py:251, in capture_sql_exception.<locals>.deco(*a, **kw)
+    248 from py4j.protocol import Py4JJavaError
+    250 try:
+--> 251     return f(*a, **kw)
+    252 except Py4JJavaError as e:
+    253     converted = convert_exception(e.java_exception)
+
+File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\py4j\protocol.py:327, in get_return_value(answer, gateway_client, target_id, name)
+    325 value = OUTPUT_CONVERTER[type](answer[2:], gateway_client)
+    326 if answer[1] == REFERENCE_TYPE:
+--> 327     raise Py4JJavaError(
+    328         "An error occurred while calling {0}{1}{2}.\n".
+    329         format(target_id, ".", name), value)
+    330 else:
+    331     raise Py4JError(
+    332         "An error occurred while calling {0}{1}{2}. Trace:\n{3}\n".
+    333         format(target_id, ".", name, value))
+
+Py4JJavaError: An error occurred while calling o1741.javaToPython.
+: org.apache.spark.SparkException: Job aborted due to stage failure: Task 2 in stage 52.0 failed 1 times, most recent failure: Lost task 2.0 in stage 52.0 (TID 151) (Sunlight-call executor driver): java.io.IOException: Espace insuffisant sur le disque
+	at java.base/java.io.FileOutputStream.writeBytes(Native Method)
+	at java.base/java.io.FileOutputStream.write(FileOutputStream.java:349)
+	at org.apache.spark.storage.TimeTrackingOutputStream.write(TimeTrackingOutputStream.java:59)
+	at org.apache.spark.io.MutableCheckedOutputStream.write(MutableCheckedOutputStream.scala:43)
+	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
+	at java.base/java.io.BufferedOutputStream.write(BufferedOutputStream.java:127)
+	at net.jpountz.lz4.LZ4BlockOutputStream.flushBufferedData(LZ4BlockOutputStream.java:225)
+	at net.jpountz.lz4.LZ4BlockOutputStream.write(LZ4BlockOutputStream.java:178)
+	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
+	at java.base/java.io.BufferedOutputStream.write(BufferedOutputStream.java:127)
+	at java.base/java.io.DataOutputStream.write(DataOutputStream.java:112)
+	at org.apache.spark.sql.catalyst.expressions.UnsafeRow.writeToStream(UnsafeRow.java:550)
+	at org.apache.spark.sql.execution.UnsafeRowSerializerInstance$$anon$1.writeValue(UnsafeRowSerializer.scala:69)
+	at org.apache.spark.storage.DiskBlockObjectWriter.write(DiskBlockObjectWriter.scala:337)
+	at org.apache.spark.shuffle.sort.BypassMergeSortShuffleWriter.write(BypassMergeSortShuffleWriter.java:185)
+	at org.apache.spark.shuffle.ShuffleWriteProcessor.write(ShuffleWriteProcessor.scala:57)
+	at org.apache.spark.scheduler.ShuffleMapTask.runTask(ShuffleMapTask.scala:111)
+	at org.apache.spark.scheduler.ShuffleMapTask.runTask(ShuffleMapTask.scala:54)
+	at org.apache.spark.TaskContext.runTaskWithListeners(TaskContext.scala:206)
+	at org.apache.spark.scheduler.Task.run(Task.scala:147)
+	at org.apache.spark.executor.Executor$TaskRunner.$anonfun$run$4(Executor.scala:894)
+	at org.apache.spark.util.SparkErrorUtils.tryWithSafeFinally(SparkErrorUtils.scala:86)
+	at org.apache.spark.util.SparkErrorUtils.tryWithSafeFinally$(SparkErrorUtils.scala:83)
+	at org.apache.spark.util.Utils$.tryWithSafeFinally(Utils.scala:97)
+	at org.apache.spark.executor.Executor$TaskRunner.run(Executor.scala:897)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635)
+	at java.base/java.lang.Thread.run(Thread.java:840)
+
+Driver stacktrace:
+	at org.apache.spark.scheduler.DAGScheduler.$anonfun$abortStage$3(DAGScheduler.scala:3318)
+	at scala.Option.getOrElse(Option.scala:201)
+	at org.apache.spark.scheduler.DAGScheduler.$anonfun$abortStage$2(DAGScheduler.scala:3318)
+	at org.apache.spark.scheduler.DAGScheduler.$anonfun$abortStage$2$adapted(DAGScheduler.scala:3310)
+	at scala.collection.immutable.List.foreach(List.scala:323)
+	at org.apache.spark.scheduler.DAGScheduler.abortStage(DAGScheduler.scala:3310)
+	at org.apache.spark.scheduler.DAGScheduler.$anonfun$handleTaskSetFailed$1(DAGScheduler.scala:1363)
+	at org.apache.spark.scheduler.DAGScheduler.$anonfun$handleTaskSetFailed$1$adapted(DAGScheduler.scala:1363)
+	at scala.Option.foreach(Option.scala:437)
+	at org.apache.spark.scheduler.DAGScheduler.handleTaskSetFailed(DAGScheduler.scala:1363)
+	at org.apache.spark.scheduler.DAGSchedulerEventProcessLoop.doOnReceive(DAGScheduler.scala:3589)
+	at org.apache.spark.scheduler.DAGSchedulerEventProcessLoop.onReceive(DAGScheduler.scala:3517)
+	at org.apache.spark.scheduler.DAGSchedulerEventProcessLoop.onReceive(DAGScheduler.scala:3506)
+	at org.apache.spark.util.EventLoop$$anon$1.run(EventLoop.scala:50)
+	at org.apache.spark.util.Utils$.getTryWithCallerStacktrace(Utils.scala:1457)
+	at org.apache.spark.util.LazyTry.get(LazyTry.scala:61)
+	at org.apache.spark.sql.execution.SparkPlan.$anonfun$execute$1(SparkPlan.scala:201)
+	at org.apache.spark.sql.execution.SparkPlan.$anonfun$executeQuery$1(SparkPlan.scala:269)
+	at org.apache.spark.rdd.RDDOperationScope$.withScope(RDDOperationScope.scala:169)
+	at org.apache.spark.sql.execution.SparkPlan.executeQuery(SparkPlan.scala:266)
+	at org.apache.spark.sql.execution.SparkPlan.execute(SparkPlan.scala:197)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$lazyToRdd$1(QueryExecution.scala:377)
+	at scala.util.Try$.apply(Try.scala:217)
+	at org.apache.spark.util.Utils$.doTryWithCallerStacktrace(Utils.scala:1407)
+	at org.apache.spark.util.Utils$.getTryWithCallerStacktrace(Utils.scala:1457)
+	at org.apache.spark.util.LazyTry.get(LazyTry.scala:61)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$toRdd$1(QueryExecution.scala:391)
+	at org.apache.spark.sql.execution.QueryExecution.withAbortTransactionOnFailure(QueryExecution.scala:632)
+	at org.apache.spark.sql.execution.QueryExecution.toRdd(QueryExecution.scala:391)
+	at org.apache.spark.sql.classic.Dataset.javaToPython(Dataset.scala:2133)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:569)
+	at py4j.reflection.MethodInvoker.invoke(MethodInvoker.java:244)
+	at py4j.reflection.ReflectionEngine.invoke(ReflectionEngine.java:374)
+	at py4j.Gateway.invoke(Gateway.java:282)
+	at py4j.commands.AbstractCommand.invokeMethod(AbstractCommand.java:132)
+	at py4j.commands.CallCommand.execute(CallCommand.java:79)
+	at py4j.ClientServerConnection.waitForCommands(ClientServerConnection.java:184)
+	at py4j.ClientServerConnection.run(ClientServerConnection.java:108)
+	at java.base/java.lang.Thread.run(Thread.java:840)
+Caused by: java.io.IOException: Espace insuffisant sur le disque
+	at java.base/java.io.FileOutputStream.writeBytes(Native Method)
+	at java.base/java.io.FileOutputStream.write(FileOutputStream.java:349)
+	at org.apache.spark.storage.TimeTrackingOutputStream.write(TimeTrackingOutputStream.java:59)
+	at org.apache.spark.io.MutableCheckedOutputStream.write(MutableCheckedOutputStream.scala:43)
+	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
+	at java.base/java.io.BufferedOutputStream.write(BufferedOutputStream.java:127)
+	at net.jpountz.lz4.LZ4BlockOutputStream.flushBufferedData(LZ4BlockOutputStream.java:225)
+	at net.jpountz.lz4.LZ4BlockOutputStream.write(LZ4BlockOutputStream.java:178)
+	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
+	at java.base/java.io.BufferedOutputStream.write(BufferedOutputStream.java:127)
+	at java.base/java.io.DataOutputStream.write(DataOutputStream.java:112)
+	at org.apache.spark.sql.catalyst.expressions.UnsafeRow.writeToStream(UnsafeRow.java:550)
+	at org.apache.spark.sql.execution.UnsafeRowSerializerInstance$$anon$1.writeValue(UnsafeRowSerializer.scala:69)
+	at org.apache.spark.storage.DiskBlockObjectWriter.write(DiskBlockObjectWriter.scala:337)
+	at org.apache.spark.shuffle.sort.BypassMergeSortShuffleWriter.write(BypassMergeSortShuffleWriter.java:185)
+	at org.apache.spark.shuffle.ShuffleWriteProcessor.write(ShuffleWriteProcessor.scala:57)
+	at org.apache.spark.scheduler.ShuffleMapTask.runTask(ShuffleMapTask.scala:111)
+	at org.apache.spark.scheduler.ShuffleMapTask.runTask(ShuffleMapTask.scala:54)
+	at org.apache.spark.TaskContext.runTaskWithListeners(TaskContext.scala:206)
+	at org.apache.spark.scheduler.Task.run(Task.scala:147)
+	at org.apache.spark.executor.Executor$TaskRunner.$anonfun$run$4(Executor.scala:894)
+	at org.apache.spark.util.SparkErrorUtils.tryWithSafeFinally(SparkErrorUtils.scala:86)
+	at org.apache.spark.util.SparkErrorUtils.tryWithSafeFinally$(SparkErrorUtils.scala:83)
+	at org.apache.spark.util.Utils$.tryWithSafeFinally(Utils.scala:97)
+	at org.apache.spark.executor.Executor$TaskRunner.run(Executor.scala:897)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635)
+	... 1 more
