@@ -2,7 +2,7 @@ import pandas as pd
 import os
 
 # ============================================================
-# 1. INPUT FILE
+# 1. INPUT EXCEL FILE
 # ============================================================
 
 input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
@@ -12,13 +12,9 @@ output_file = os.path.splitext(input_file)[0] + "_telephone.xlsx"
 
 
 # ============================================================
-# 2. COLUMNS
+# 2. COLUMNS TO KEEP
 # ============================================================
 
-# Columns containing telephone numbers
-phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
-
-# All other information to keep
 info_columns = [
     "STE",
     "TVA",
@@ -30,55 +26,39 @@ info_columns = [
     "VILLE"
 ]
 
-
-# ============================================================
-# 3. READ EXCEL
-# ============================================================
-
-df = pd.read_excel(input_file, dtype=str)
-
-# Remove spaces from column names
-df.columns = df.columns.str.strip()
+phone_columns = [
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3"
+]
 
 
 # ============================================================
-# 4. MAKE SURE PHONE COLUMNS EXIST
+# 3. READ THE EXCEL FILE
 # ============================================================
 
-for col in phone_columns:
+df = pd.read_excel(input_file)
+
+
+# ============================================================
+# 4. CREATE MISSING COLUMNS IF NECESSARY
+# ============================================================
+
+for col in info_columns + phone_columns:
     if col not in df.columns:
         df[col] = ""
 
 
-# Make sure information columns exist
-for col in info_columns:
-    if col not in df.columns:
-        df[col] = ""
+# ============================================================
+# 5. KEEP THE REQUIRED COLUMNS
+# ============================================================
+
+df = df[info_columns + phone_columns]
 
 
 # ============================================================
-# 5. KEEP ONLY THE REQUIRED INFORMATION
-# ============================================================
-
-df = df[info_columns + phone_columns].copy()
-
-
-# ============================================================
-# 6. CLEAN PHONE COLUMNS
-# ============================================================
-
-for col in phone_columns:
-    df[col] = (
-        df[col]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-        .str.replace(r"\.0$", "", regex=True)
-    )
-
-
-# ============================================================
-# 7. PUT GSM + TEL1 + TEL2 + TEL3 INTO ONE COLUMN
+# 6. GSM + TEL1 + TEL2 + TEL3 → TELEPHONE
 # ============================================================
 
 result = df.melt(
@@ -90,50 +70,54 @@ result = df.melt(
 
 
 # ============================================================
-# 8. REMOVE EMPTY TELEPHONE ROWS
+# 7. REMOVE ONLY COMPLETELY EMPTY PHONE CELLS
 # ============================================================
+# IMPORTANT:
+# No cleaning or modification of telephone numbers.
+# The actual values are kept as they were in Excel.
 
-result["TELEPHONE"] = result["TELEPHONE"].str.strip()
-
-result = result[result["TELEPHONE"] != ""].copy()
+result = result[
+    result["TELEPHONE"].notna() &
+    (result["TELEPHONE"].astype(str).str.strip() != "")
+]
 
 
 # ============================================================
-# 9. REMOVE THE SOURCE COLUMN
+# 8. REMOVE SOURCE COLUMN
 # ============================================================
 
 result = result.drop(columns=["SOURCE"])
 
 
 # ============================================================
-# 10. FINAL COLUMN ORDER
+# 9. FINAL COLUMN ORDER
 # ============================================================
 
-final_columns = [
-    "STE",
-    "TVA",
-    "NOM",
-    "ADRESSE",
-    "NUMERO",
-    "COMPLEMENT",
-    "CP",
-    "VILLE",
-    "TELEPHONE"
+result = result[
+    [
+        "STE",
+        "TVA",
+        "NOM",
+        "ADRESSE",
+        "NUMERO",
+        "COMPLEMENT",
+        "CP",
+        "VILLE",
+        "TELEPHONE"
+    ]
 ]
 
-result = result[final_columns]
-
 
 # ============================================================
-# 11. SAVE
+# 10. SAVE
 # ============================================================
 
 result.to_excel(output_file, index=False)
 
-print("========================================")
+
+print("======================================")
 print("DONE!")
-print("========================================")
-print(f"Input file : {input_file}")
-print(f"Output file: {output_file}")
-print(f"Total telephone rows: {len(result):,}")
-print("========================================")
+print("======================================")
+print("Output:", output_file)
+print("Total telephone rows:", len(result))
+print("======================================")
