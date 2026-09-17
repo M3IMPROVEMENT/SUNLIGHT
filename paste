@@ -1,10 +1,1 @@
-from pyspark.sql import SparkSession
-
-spark = (
-    SparkSession.builder
-    .master("local[*]")
-    .appName("KBO")
-    .getOrCreate()
-)
-
-print(spark.version)
+python -c "import pyspark; print(pyspark.__version__)"
