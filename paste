@@ -1,1 +1,4 @@
-https://github.com/rockthejvm/spark-essentials?utm_source=chatgpt.com
+import os
+
+print("HADOOP_HOME =", os.environ.get("HADOOP_HOME"))
+print("Exists =", os.path.exists(r"C:\hadoop\bin\winutils.exe"))
