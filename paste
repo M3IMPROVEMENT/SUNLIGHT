@@ -1,26 +1,25 @@
 from pathlib import Path
 from openpyxl import load_workbook, Workbook
-from datetime import datetime
 
 
 # ============================================================
-# 1. FOLDER CONTAINING YOUR MASTER FILES
+# 1. INPUT EXCEL FILE
 # ============================================================
 
-INPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\15-09-26\MERIAME15_9\Nouveau dossier")
-
-
-# ============================================================
-# 2. OUTPUT FOLDER
-# ============================================================
-
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT_FOLDER = INPUT_FOLDER / f"TELEPHONE_OUTPUT_{timestamp}"
-OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
+INPUT_FILE = Path(
+    r"C:\Users\Sunlight\Desktop\15-09-26\MERIAME15_9\Nouveau dossier\YOUR_FILE.xlsx"
+)
 
 
 # ============================================================
-# 3. COLUMNS WE WANT TO KEEP
+# 2. OUTPUT FILE
+# ============================================================
+
+OUTPUT_FILE = INPUT_FILE.parent / f"{INPUT_FILE.stem}_TELEPHONE.xlsx"
+
+
+# ============================================================
+# 3. COLUMNS TO KEEP
 # ============================================================
 
 BASE_COLUMNS = [
@@ -41,176 +40,142 @@ PHONE_COLUMNS = [
     "TEL3"
 ]
 
-FINAL_COLUMNS = BASE_COLUMNS + [
-    "TELEPHONE"
-]
+FINAL_COLUMNS = BASE_COLUMNS + ["TELEPHONE"]
 
 
 # ============================================================
-# 4. FIND MASTER FILES
+# 4. OPEN INPUT FILE
 # ============================================================
 
-master_files = sorted(
-    [
-        f for f in INPUT_FOLDER.glob("MASTER_*.xlsx")
-        if not f.name.startswith("~$")
-    ]
+print("=" * 70)
+print(f"Processing: {INPUT_FILE.name}")
+print("=" * 70)
+
+wb_in = load_workbook(
+    INPUT_FILE,
+    read_only=True,
+    data_only=False
 )
 
-print(f"\n{len(master_files)} Master files found.\n")
+ws_in = wb_in.active
 
 
 # ============================================================
-# 5. PROCESS EACH MASTER SEPARATELY
+# 5. READ HEADER
 # ============================================================
 
-for master_file in master_files:
+header = next(ws_in.iter_rows(values_only=True))
 
-    print("=" * 70)
-    print(f"Processing: {master_file.name}")
-    print("=" * 70)
+header_map = {
+    str(value).strip().upper(): index
+    for index, value in enumerate(header)
+    if value is not None
+}
+
+
+# ============================================================
+# 6. CHECK REQUIRED COLUMNS
+# ============================================================
+
+required_columns = BASE_COLUMNS + PHONE_COLUMNS
+
+missing_columns = [
+    column
+    for column in required_columns
+    if column.upper() not in header_map
+]
+
+if missing_columns:
+    print("❌ Missing columns:")
+    print(missing_columns)
+    wb_in.close()
+    raise SystemExit
+
+
+# ============================================================
+# 7. CREATE OUTPUT FILE
+# ============================================================
+
+wb_out = Workbook(write_only=True)
+ws_out = wb_out.create_sheet("DATA")
+
+# Final header
+ws_out.append(FINAL_COLUMNS)
+
+
+# ============================================================
+# 8. PROCESS EACH ROW
+# ============================================================
+
+output_rows = 0
+telephone_count = 0
+
+for row in ws_in.iter_rows(
+    min_row=2,
+    values_only=True
+):
 
     # --------------------------------------------------------
-    # OPEN ONE MASTER
+    # COMPANY INFORMATION
     # --------------------------------------------------------
 
-    wb_in = load_workbook(
-        master_file,
-        read_only=True,
-        data_only=False
-    )
-
-    ws_in = wb_in.active
-
-    # --------------------------------------------------------
-    # READ HEADER
-    # --------------------------------------------------------
-
-    header = next(ws_in.iter_rows(values_only=True))
-
-    header_map = {
-        str(value).strip().upper(): index
-        for index, value in enumerate(header)
-        if value is not None
-    }
-
-    # --------------------------------------------------------
-    # CHECK REQUIRED COLUMNS
-    # --------------------------------------------------------
-
-    required_columns = BASE_COLUMNS + PHONE_COLUMNS 
-
-    missing_columns = [
-        column
-        for column in required_columns
-        if column.upper() not in header_map
+    base_data = [
+        row[header_map[column.upper()]]
+        for column in BASE_COLUMNS
     ]
 
-    if missing_columns:
-        print(f"❌ Missing columns: {missing_columns}")
-        wb_in.close()
-        continue
 
     # --------------------------------------------------------
-    # CREATE ONE OUTPUT FILE FOR THIS MASTER
+    # GET GSM + TEL1 + TEL2 + TEL3
     # --------------------------------------------------------
 
-    wb_out = Workbook(write_only=True)
-    ws_out = wb_out.create_sheet("DATA")
+    phones = []
 
-    # Header
-    ws_out.append(FINAL_COLUMNS)
+    for phone_column in PHONE_COLUMNS:
 
-    # --------------------------------------------------------
-    # PROCESS ROWS
-    # --------------------------------------------------------
+        value = row[header_map[phone_column.upper()]]
 
-    output_rows = 0
+        # ONLY ignore empty cells.
+        # DO NOT clean or modify the telephone.
+        if value is not None and value != "":
+            phones.append(value)
 
-    for row in ws_in.iter_rows(
-        min_row=2,
-        values_only=True
-    ):
-
-        # Company information
-        base_data = [
-            row[header_map[column.upper()]]
-            for column in BASE_COLUMNS
-        ]
-
-        
-        # ----------------------------------------------------
-        # GET GSM + TEL1 + TEL2 + TEL3
-        # ----------------------------------------------------
-
-        phones = []
-
-        for phone_column in PHONE_COLUMNS:
-
-            value = row[header_map[phone_column.upper()]]
-
-            # Keep the value exactly as it is
-            # Only ignore completely empty cells
-            if value is not None and value != "":
-                phones.append(value)
-
-        # ----------------------------------------------------
-        # ONE PHONE = ONE ROW
-        # ----------------------------------------------------
-
-        if phones:
-
-            for phone in phones:
-
-                output_row = (
-                    base_data
-                    + [phone]
-                   
-                )
-
-                ws_out.append(output_row)
-                output_rows += 1
-
-        # ----------------------------------------------------
-        # IF NO PHONE, KEEP THE ORIGINAL ROW
-        # ----------------------------------------------------
-
-        else:
-
-            output_row = (
-                base_data
-                + [""]
-                
-            )
-
-            ws_out.append(output_row)
-            output_rows += 1
 
     # --------------------------------------------------------
-    # SAVE EXACTLY ONE OUTPUT FOR THIS MASTER
+    # ONE TELEPHONE = ONE ROW
     # --------------------------------------------------------
 
-    output_file = (
-        OUTPUT_FOLDER
-        / f"{master_file.stem}_TELEPHONE.xlsx"
-    )
+    for phone in phones:
 
-    wb_out.save(output_file)
-    wb_in.close()
+        output_row = base_data + [phone]
 
-    print(f"✅ Finished: {master_file.name}")
-    print(f"   Output rows: {output_rows:,}")
-    print(f"   Output file: {output_file.name}")
-    print()
+        ws_out.append(output_row)
+
+        output_rows += 1
+        telephone_count += 1
 
 
 # ============================================================
-# 6. FINISHED
+# 9. SAVE
 # ============================================================
 
+wb_out.save(OUTPUT_FILE)
+
+wb_in.close()
+
+
+# ============================================================
+# 10. FINAL RESULT
+# ============================================================
+
+print()
 print("=" * 70)
-print("ALL MASTER FILES FINISHED")
+print("DONE")
 print("=" * 70)
 
-print(f"\nOutput folder:")
-print(OUTPUT_FOLDER)s
+print(f"Input file       : {INPUT_FILE}")
+print(f"Output file      : {OUTPUT_FILE}")
+print(f"TELEPHONE count  : {telephone_count:,}")
+print(f"Output rows      : {output_rows:,}")
+
+print("=" * 70)
