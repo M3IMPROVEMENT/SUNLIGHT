@@ -1,37 +1,36 @@
-import os
-import shutil
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, regexp_replace, trim, lit
+from pyspark.sql.functions import col, regexp_replace, trim, lit, monotonically_increasing_id
+import os
+from openpyxl import Workbook
 
 # ============================================================
-# 1. START SPARK
+# SPARK
 # ============================================================
 
 spark = (
     SparkSession.builder
     .master("local[*]")
-    .appName("KBO_TO_EXCEL")
+    .appName("KBO_CONNECT_ALL_TO_EXCEL")
     .getOrCreate()
 )
 
 spark.sparkContext.setLogLevel("WARN")
 
 # ============================================================
-# 2. PATHS
+# PATHS
 # ============================================================
 
 DATA_DIR = r"C:\Users\Sunlight\Downloads\KBO_0485_WORK\data"
 
-OUTPUT_DIR = r"C:\Users\Sunlight\Desktop\17-09-26\KBO_EXCEL"
+OUTPUT_DIR = r"C:\Users\Sunlight\Desktop\17-09-26\KBO_CONNECTED_EXCEL"
 
-# Create output directory
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ============================================================
-# 3. KBO FILES
+# FILES
 # ============================================================
 
-FILES = [
+files = [
     "enterprise.csv",
     "denomination.csv",
     "address.csv",
@@ -43,38 +42,35 @@ FILES = [
     "meta.csv"
 ]
 
-# Maximum rows in each Excel file
+# Excel maximum is 1,048,576 rows.
+# We use 500,000 DATA rows per Excel file.
 ROWS_PER_EXCEL = 500_000
 
 # ============================================================
-# 4. PROCESS EACH FILE SEPARATELY
+# READ ALL FILES
 # ============================================================
 
-for filename in FILES:
+all_tables = []
 
-    print("\n" + "=" * 70)
-    print("PROCESSING:", filename)
+for filename in files:
+
+    path = os.path.join(DATA_DIR, filename)
+
     print("=" * 70)
-
-    input_path = os.path.join(DATA_DIR, filename)
-
-    # --------------------------------------------------------
-    # Read CSV
-    # --------------------------------------------------------
+    print("Reading:", filename)
 
     df = (
         spark.read
         .option("header", True)
         .option("inferSchema", False)
         .option("encoding", "UTF-8")
-        .option("multiLine", False)
-        .csv(input_path)
+        .csv(path)
     )
 
     print("Columns:", len(df.columns))
 
     # --------------------------------------------------------
-    # Find Enterprise / Entity number
+    # Find KBO key
     # --------------------------------------------------------
 
     key_column = None
@@ -100,208 +96,189 @@ for filename in FILES:
             )
         )
 
-        print("KBO key:", key_column)
+        print("Key:", key_column)
 
-    else:
-
-        print("No EnterpriseNumber / EntityNumber")
-        print("This file will be exported without KBO_KEY.")
-
-    # --------------------------------------------------------
-    # Create folder for this source
-    # --------------------------------------------------------
-
-    source_name = os.path.splitext(filename)[0]
-
-    source_output = os.path.join(
-        OUTPUT_DIR,
-        source_name
-    )
-
-    os.makedirs(source_output, exist_ok=True)
-
-    # ========================================================
-    # COUNT ROWS
-    # ========================================================
-
-    print("Counting rows...")
-
-    total_rows = df.count()
-
-    print("TOTAL ROWS:", total_rows)
-
-    # ========================================================
-    # NUMBER OF EXCEL FILES
-    # ========================================================
-
-    number_of_files = (
-        total_rows + ROWS_PER_EXCEL - 1
-    ) // ROWS_PER_EXCEL
-
-    print("Excel files needed:", number_of_files)
-
-    # ========================================================
-    # SPLIT INTO PARTITIONS
-    # ========================================================
-
-    # Add a sequential ID to every row.
-    # This does NOT remove or duplicate rows.
-
-    df = df.rdd.zipWithIndex().map(
-        lambda x: (*x[0], x[1])
-    )
-
-    # Re-create dataframe with original columns + row index
-    columns = df.first()
-
-    # Instead of using first() on the huge dataframe,
-    # create the schema from the original dataframe.
-
-    original_columns = (
-        spark.read
-        .option("header", True)
-        .option("inferSchema", False)
-        .csv(input_path)
-        .columns
-    )
-
-    if key_column:
-        final_columns = original_columns + ["KBO_KEY"]
-    else:
-        final_columns = original_columns
-
-    # ========================================================
-    # IMPORTANT:
-    # Use monotonically increasing ID instead of collecting
-    # millions of rows into Python.
-    # ========================================================
-
-    from pyspark.sql.functions import monotonically_increasing_id
-
-    df = df.drop("_temp_index") if "_temp_index" in df.columns else df
-
-    # Re-read because the previous RDD transformation is not needed
-    df = (
-        spark.read
-        .option("header", True)
-        .option("inferSchema", False)
-        .option("encoding", "UTF-8")
-        .csv(input_path)
-    )
-
-    if key_column:
         df = df.withColumn(
-            "KBO_KEY",
-            regexp_replace(
-                trim(col(key_column)),
-                "[^0-9]",
-                ""
-            )
+            "SOURCE",
+            lit(filename)
         )
 
-    # Add Spark-generated row ID
-    df = df.withColumn(
-        "_ROW_ID",
-        monotonically_increasing_id()
+        all_tables.append(df)
+
+    else:
+
+        print("NO ENTERPRISE/ENTITY NUMBER -> skipped")
+
+    print()
+
+# ============================================================
+# CONNECT ALL TABLES
+# ============================================================
+
+print("=" * 70)
+print("Connecting all tables...")
+print("=" * 70)
+
+# Get every column appearing in every table
+all_columns = set()
+
+for df in all_tables:
+    all_columns.update(df.columns)
+
+all_columns = list(all_columns)
+
+print("Total columns in final table:", len(all_columns))
+
+# ============================================================
+# MAKE SAME STRUCTURE
+# ============================================================
+
+prepared = []
+
+for df in all_tables:
+
+    for c in all_columns:
+
+        if c not in df.columns:
+
+            df = df.withColumn(
+                c,
+                lit(None).cast("string")
+            )
+
+    df = df.select(all_columns)
+
+    prepared.append(df)
+
+# ============================================================
+# UNION
+# ============================================================
+
+result = prepared[0]
+
+for df in prepared[1:]:
+
+    result = result.unionByName(
+        df,
+        allowMissingColumns=True
     )
 
-    # ========================================================
-    # CREATE EACH EXCEL CHUNK
-    # ========================================================
+print("All tables connected.")
 
-    for part_number in range(number_of_files):
+# ============================================================
+# COUNT
+# ============================================================
 
-        start = part_number * ROWS_PER_EXCEL
-        end = start + ROWS_PER_EXCEL
-
-        print(
-            f"Writing {source_name} "
-            f"{part_number + 1}/{number_of_files}"
-        )
-
-        # ----------------------------------------------------
-        # Select this chunk
-        # ----------------------------------------------------
-
-        part_df = (
-            df
-            .filter(
-                (col("_ROW_ID") >= start) &
-                (col("_ROW_ID") < end)
-            )
-            .drop("_ROW_ID")
-        )
-
-        # ----------------------------------------------------
-        # Temporary CSV-free Excel writing
-        # ----------------------------------------------------
-
-        output_file = os.path.join(
-            source_output,
-            f"{source_name}_{part_number + 1:03d}.xlsx"
-        )
-
-        # Collect only ONE chunk into Python.
-        # 500,000 rows is still large, but manageable if RAM
-        # and disk are sufficient.
-        rows = part_df.collect()
-
-        if not rows:
-            continue
-
-        # ----------------------------------------------------
-        # Write Excel with XlsxWriter
-        # ----------------------------------------------------
-
-        import xlsxwriter
-
-        workbook = xlsxwriter.Workbook(
-            output_file,
-            {
-                "constant_memory": True
-            }
-        )
-
-        worksheet = workbook.add_worksheet(source_name[:31])
-
-        # Headers
-        for c, column_name in enumerate(part_df.columns):
-
-            worksheet.write(
-                0,
-                c,
-                column_name
-            )
-
-        # Data
-        for r, row in enumerate(rows, start=1):
-
-            for c, value in enumerate(row):
-
-                if value is None:
-                    value = ""
-
-                worksheet.write(
-                    r,
-                    c,
-                    str(value)
-                )
-
-        workbook.close()
-
-        print(
-            "Created:",
-            output_file
-        )
-
-        # Free memory
-        del rows
-
-    print("FINISHED:", filename)
-
-
-print("\n")
 print("=" * 70)
-print("ALL KBO FILES FINISHED")
+print("Counting final rows...")
 print("=" * 70)
-print("Output:", OUTPUT_DIR)
+
+total_rows = result.count()
+
+print("TOTAL ROWS:", total_rows)
+
+# ============================================================
+# ADD ROW ID
+# ============================================================
+
+result = result.withColumn(
+    "_ROW_ID",
+    monotonically_increasing_id()
+)
+
+# ============================================================
+# NUMBER OF EXCEL FILES
+# ============================================================
+
+number_of_files = (
+    total_rows + ROWS_PER_EXCEL - 1
+) // ROWS_PER_EXCEL
+
+print("Excel files required:", number_of_files)
+
+# ============================================================
+# IMPORTANT:
+# Repartition into manageable partitions
+# ============================================================
+
+result = result.repartition(
+    max(number_of_files, 1)
+)
+
+# ============================================================
+# WRITE EXCEL
+# ============================================================
+
+columns = [
+    c for c in result.columns
+    if c != "_ROW_ID"
+]
+
+print("=" * 70)
+print("Writing Excel files...")
+print("=" * 70)
+
+def write_partition(iterator):
+
+    from openpyxl import Workbook
+
+    rows = list(iterator)
+
+    if not rows:
+        return
+
+    # Partition number is not directly available here,
+    # so each Spark partition writes its own Excel file.
+
+    import uuid
+
+    filename = (
+        "KBO_part_"
+        + str(uuid.uuid4())
+        + ".xlsx"
+    )
+
+    output_file = os.path.join(
+        OUTPUT_DIR,
+        filename
+    )
+
+    wb = Workbook(
+        write_only=True
+    )
+
+    ws = wb.create_sheet("KBO")
+
+    # Header
+    ws.append(columns)
+
+    # Data
+    for row in rows:
+
+        row_dict = row.asDict()
+
+        ws.append([
+            row_dict.get(c)
+            for c in columns
+        ])
+
+    wb.save(output_file)
+
+    print("Created:", output_file)
+
+
+# ============================================================
+# RUN
+# ============================================================
+
+result.rdd.mapPartitions(
+    write_partition
+).count()
+
+print()
+print("=" * 70)
+print("DONE")
+print("=" * 70)
+
+print("Output folder:")
+print(OUTPUT_DIR)
