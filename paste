@@ -1,9 +1,9 @@
 from pathlib import Path
-from openpyxl import load_workbook, Workbook
+from openpyxl import load_workbook
 
 
 # ============================================================
-# 1. INPUT EXCEL FILE
+# INPUT FILE
 # ============================================================
 
 INPUT_FILE = Path(
@@ -12,26 +12,8 @@ INPUT_FILE = Path(
 
 
 # ============================================================
-# 2. OUTPUT FILE
+# PHONE COLUMNS
 # ============================================================
-
-OUTPUT_FILE = INPUT_FILE.parent / f"{INPUT_FILE.stem}_TELEPHONE.xlsx"
-
-
-# ============================================================
-# 3. COLUMNS TO KEEP
-# ============================================================
-
-BASE_COLUMNS = [
-    "STE",
-    "TVA",
-    "NOM",
-    "ADRESSE",
-    "NUMERO",
-    "COMPLEMENT",
-    "CP",
-    "VILLE"
-]
 
 PHONE_COLUMNS = [
     "GSM",
@@ -40,31 +22,25 @@ PHONE_COLUMNS = [
     "TEL3"
 ]
 
-FINAL_COLUMNS = BASE_COLUMNS + ["TELEPHONE"]
-
 
 # ============================================================
-# 4. OPEN INPUT FILE
+# OPEN FILE
 # ============================================================
 
-print("=" * 70)
-print(f"Processing: {INPUT_FILE.name}")
-print("=" * 70)
-
-wb_in = load_workbook(
+wb = load_workbook(
     INPUT_FILE,
     read_only=True,
     data_only=False
 )
 
-ws_in = wb_in.active
+ws = wb.active
 
 
 # ============================================================
-# 5. READ HEADER
+# READ HEADER
 # ============================================================
 
-header = next(ws_in.iter_rows(values_only=True))
+header = next(ws.iter_rows(values_only=True))
 
 header_map = {
     str(value).strip().upper(): index
@@ -74,108 +50,57 @@ header_map = {
 
 
 # ============================================================
-# 6. CHECK REQUIRED COLUMNS
+# CHECK COLUMNS
 # ============================================================
 
-required_columns = BASE_COLUMNS + PHONE_COLUMNS
+for column in PHONE_COLUMNS:
 
-missing_columns = [
-    column
-    for column in required_columns
-    if column.upper() not in header_map
-]
-
-if missing_columns:
-    print("❌ Missing columns:")
-    print(missing_columns)
-    wb_in.close()
-    raise SystemExit
+    if column.upper() not in header_map:
+        print(f"❌ Column not found: {column}")
 
 
 # ============================================================
-# 7. CREATE OUTPUT FILE
+# COUNT EACH COLUMN
 # ============================================================
 
-wb_out = Workbook(write_only=True)
-ws_out = wb_out.create_sheet("DATA")
+counts = {
+    "GSM": 0,
+    "TEL1": 0,
+    "TEL2": 0,
+    "TEL3": 0
+}
 
-# Final header
-ws_out.append(FINAL_COLUMNS)
 
-
-# ============================================================
-# 8. PROCESS EACH ROW
-# ============================================================
-
-output_rows = 0
-telephone_count = 0
-
-for row in ws_in.iter_rows(
+for row in ws.iter_rows(
     min_row=2,
     values_only=True
 ):
 
-    # --------------------------------------------------------
-    # COMPANY INFORMATION
-    # --------------------------------------------------------
+    for column in PHONE_COLUMNS:
 
-    base_data = [
-        row[header_map[column.upper()]]
-        for column in BASE_COLUMNS
-    ]
+        value = row[header_map[column.upper()]]
 
-
-    # --------------------------------------------------------
-    # GET GSM + TEL1 + TEL2 + TEL3
-    # --------------------------------------------------------
-
-    phones = []
-
-    for phone_column in PHONE_COLUMNS:
-
-        value = row[header_map[phone_column.upper()]]
-
-        # ONLY ignore empty cells.
-        # DO NOT clean or modify the telephone.
+        # Count every non-empty cell
         if value is not None and value != "":
-            phones.append(value)
-
-
-    # --------------------------------------------------------
-    # ONE TELEPHONE = ONE ROW
-    # --------------------------------------------------------
-
-    for phone in phones:
-
-        output_row = base_data + [phone]
-
-        ws_out.append(output_row)
-
-        output_rows += 1
-        telephone_count += 1
+            counts[column] += 1
 
 
 # ============================================================
-# 9. SAVE
-# ============================================================
-
-wb_out.save(OUTPUT_FILE)
-
-wb_in.close()
-
-
-# ============================================================
-# 10. FINAL RESULT
+# RESULT
 # ============================================================
 
 print()
-print("=" * 70)
-print("DONE")
-print("=" * 70)
+print("=" * 60)
+print("PHONE COUNTS READ BY PYTHON")
+print("=" * 60)
 
-print(f"Input file       : {INPUT_FILE}")
-print(f"Output file      : {OUTPUT_FILE}")
-print(f"TELEPHONE count  : {telephone_count:,}")
-print(f"Output rows      : {output_rows:,}")
+for column in PHONE_COLUMNS:
+    print(f"{column:<10}: {counts[column]:,}")
 
-print("=" * 70)
+total = sum(counts.values())
+
+print("-" * 60)
+print(f"TOTAL      : {total:,}")
+print("=" * 60)
+
+wb.close()
