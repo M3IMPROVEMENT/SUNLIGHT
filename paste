@@ -1,9 +1,9 @@
 from pathlib import Path
-from openpyxl import load_workbook
+from openpyxl import load_workbook, Workbook
 
 
 # ============================================================
-# INPUT FILE
+# 1. INPUT EXCEL FILE
 # ============================================================
 
 INPUT_FILE = Path(
@@ -12,8 +12,26 @@ INPUT_FILE = Path(
 
 
 # ============================================================
-# PHONE COLUMNS
+# 2. OUTPUT FILE
 # ============================================================
+
+OUTPUT_FILE = INPUT_FILE.parent / f"{INPUT_FILE.stem}_TELEPHONE.xlsx"
+
+
+# ============================================================
+# 3. COLUMNS
+# ============================================================
+
+BASE_COLUMNS = [
+    "STE",
+    "TVA",
+    "NOM",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE"
+]
 
 PHONE_COLUMNS = [
     "GSM",
@@ -22,25 +40,27 @@ PHONE_COLUMNS = [
     "TEL3"
 ]
 
+FINAL_COLUMNS = BASE_COLUMNS + ["TELEPHONE"]
+
 
 # ============================================================
-# OPEN FILE
+# 4. OPEN INPUT
 # ============================================================
 
-wb = load_workbook(
+wb_in = load_workbook(
     INPUT_FILE,
     read_only=True,
     data_only=False
 )
 
-ws = wb.active
+ws_in = wb_in.active
 
 
 # ============================================================
-# READ HEADER
+# 5. READ HEADER
 # ============================================================
 
-header = next(ws.iter_rows(values_only=True))
+header = next(ws_in.iter_rows(values_only=True))
 
 header_map = {
     str(value).strip().upper(): index
@@ -50,57 +70,161 @@ header_map = {
 
 
 # ============================================================
-# CHECK COLUMNS
+# 6. CHECK COLUMNS
 # ============================================================
 
-for column in PHONE_COLUMNS:
+required_columns = BASE_COLUMNS + PHONE_COLUMNS
 
-    if column.upper() not in header_map:
-        print(f"❌ Column not found: {column}")
+missing_columns = [
+    column
+    for column in required_columns
+    if column.upper() not in header_map
+]
+
+if missing_columns:
+    print("❌ Missing columns:")
+    print(missing_columns)
+    wb_in.close()
+    raise SystemExit
 
 
 # ============================================================
-# COUNT EACH COLUMN
+# 7. CREATE OUTPUT
 # ============================================================
 
-counts = {
-    "GSM": 0,
-    "TEL1": 0,
-    "TEL2": 0,
-    "TEL3": 0
-}
+wb_out = Workbook(write_only=True)
+ws_out = wb_out.create_sheet("DATA")
+
+ws_out.append(FINAL_COLUMNS)
 
 
-for row in ws.iter_rows(
+# ============================================================
+# 8. COUNTERS
+# ============================================================
+
+telephone_count = 0
+empty_telephone_rows = 0
+output_rows = 0
+
+gsm_count = 0
+tel1_count = 0
+tel2_count = 0
+tel3_count = 0
+
+
+# ============================================================
+# 9. PROCESS EVERY ROW
+# ============================================================
+
+for row in ws_in.iter_rows(
     min_row=2,
     values_only=True
 ):
 
-    for column in PHONE_COLUMNS:
+    # --------------------------------------------------------
+    # COMPANY INFORMATION
+    # --------------------------------------------------------
 
-        value = row[header_map[column.upper()]]
+    base_data = [
+        row[header_map[column.upper()]]
+        for column in BASE_COLUMNS
+    ]
 
-        # Count every non-empty cell
-        if value is not None and value != "":
-            counts[column] += 1
+
+    # --------------------------------------------------------
+    # GET PHONES
+    # --------------------------------------------------------
+
+    phones = []
+
+    # GSM
+    value = row[header_map["GSM"]]
+
+    if value is not None and value != "":
+        phones.append(value)
+        gsm_count += 1
+
+
+    # TEL1
+    value = row[header_map["TEL1"]]
+
+    if value is not None and value != "":
+        phones.append(value)
+        tel1_count += 1
+
+
+    # TEL2
+    value = row[header_map["TEL2"]]
+
+    if value is not None and value != "":
+        phones.append(value)
+        tel2_count += 1
+
+
+    # TEL3
+    value = row[header_map["TEL3"]]
+
+    if value is not None and value != "":
+        phones.append(value)
+        tel3_count += 1
+
+
+    # --------------------------------------------------------
+    # ONE PHONE = ONE ROW
+    # --------------------------------------------------------
+
+    if phones:
+
+        for phone in phones:
+
+            ws_out.append(
+                base_data + [phone]
+            )
+
+            telephone_count += 1
+            output_rows += 1
+
+
+    # --------------------------------------------------------
+    # NO PHONE → KEEP THE ORIGINAL ROW
+    # --------------------------------------------------------
+
+    else:
+
+        ws_out.append(
+            base_data + [""]
+        )
+
+        empty_telephone_rows += 1
+        output_rows += 1
 
 
 # ============================================================
-# RESULT
+# 10. SAVE
+# ============================================================
+
+wb_out.save(OUTPUT_FILE)
+
+wb_in.close()
+
+
+# ============================================================
+# 11. FINAL REPORT
 # ============================================================
 
 print()
-print("=" * 60)
-print("PHONE COUNTS READ BY PYTHON")
-print("=" * 60)
+print("=" * 70)
+print("DONE")
+print("=" * 70)
 
-for column in PHONE_COLUMNS:
-    print(f"{column:<10}: {counts[column]:,}")
-
-total = sum(counts.values())
-
-print("-" * 60)
-print(f"TOTAL      : {total:,}")
-print("=" * 60)
-
-wb.close()
+print(f"GSM              : {gsm_count:,}")
+print(f"TEL1             : {tel1_count:,}")
+print(f"TEL2             : {tel2_count:,}")
+print(f"TEL3             : {tel3_count:,}")
+print("-" * 70)
+print(f"TOTAL TELEPHONES : {telephone_count:,}")
+print(f"NO PHONE ROWS    : {empty_telephone_rows:,}")
+print(f"TOTAL OUTPUT ROWS: {output_rows:,}")
+print("-" * 70)
+print(f"OUTPUT FILE      : {OUTPUT_FILE}")
+print("=" * 70)
