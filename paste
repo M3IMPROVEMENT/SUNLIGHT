@@ -2,20 +2,19 @@ import pandas as pd
 import os
 
 # ============================================================
-# 1. INPUT EXCEL FILE
+# INPUT FILE
 # ============================================================
 
 input_file = r"C:\Users\Sunlight\Desktop\15-09-26\MERIAME15_9\CALLADVANCE BASE TOTAL.xlsx"
 
-# Output file
-output_file = os.path.splitext(input_file)[0] + "_telephone.xlsx"
+output_file = os.path.splitext(input_file)[0] + "_TELEPHONE.xlsx"
 
 
 # ============================================================
-# 2. COLUMNS TO KEEP
+# COLUMNS
 # ============================================================
 
-info_columns = [
+base_columns = [
     "STE",
     "TVA",
     "NOM",
@@ -35,322 +34,85 @@ phone_columns = [
 
 
 # ============================================================
-# 3. READ THE EXCEL FILE
+# READ EXCEL
 # ============================================================
 
-df = pd.read_excel(input_file)
-
-
-# ============================================================
-# 4. CREATE MISSING COLUMNS IF NECESSARY
-# ============================================================
-
-for col in info_columns + phone_columns:
-    if col not in df.columns:
-        df[col] = ""
-
-
-# ============================================================
-# 5. KEEP THE REQUIRED COLUMNS
-# ============================================================
-
-df = df[info_columns + phone_columns]
-
-
-# ============================================================
-# 6. GSM + TEL1 + TEL2 + TEL3 → TELEPHONE
-# ============================================================
-
-result = df.melt(
-    id_vars=info_columns,
-    value_vars=phone_columns,
-    var_name="SOURCE",
-    value_name="TELEPHONE"
+df = pd.read_excel(
+    input_file,
+    dtype=object
 )
 
 
 # ============================================================
-# 7. REMOVE ONLY COMPLETELY EMPTY PHONE CELLS
+# CHECK COLUMNS
 # ============================================================
-# IMPORTANT:
-# No cleaning or modification of telephone numbers.
-# The actual values are kept as they were in Excel.
 
-result = result[
-    result["TELEPHONE"].notna() &
-    (result["TELEPHONE"].astype(str).str.strip() != "")
+required_columns = base_columns + phone_columns
+
+missing = [
+    col for col in required_columns
+    if col not in df.columns
 ]
 
-
-# ============================================================
-# 8. REMOVE SOURCE COLUMN
-# ============================================================
-
-result = result.drop(columns=["SOURCE"])
+if missing:
+    print("Missing columns:")
+    print(missing)
+    raise SystemExit
 
 
 # ============================================================
-# 9. FINAL COLUMN ORDER
+# CREATE ONE ROW FOR EACH TELEPHONE
 # ============================================================
 
-result = result[
-    [
-        "STE",
-        "TVA",
-        "NOM",
-        "ADRESSE",
-        "NUMERO",
-        "COMPLEMENT",
-        "CP",
-        "VILLE",
-        "TELEPHONE"
-    ]
-]
+rows = []
 
+for _, row in df.iterrows():
 
-# ============================================================
-# 10. SAVE
-# ============================================================
-
-result.to_excel(output_file, index=False)
-
-
-print("======================================")
-print("DONE!")
-print("======================================")
-print("Output:", output_file)
-print("Total telephone rows:", len(result))
-print("======================================")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-from pathlib import Path
-from openpyxl import load_workbook, Workbook
-from datetime import datetime
-
-
-# ============================================================
-# 1. FOLDER CONTAINING YOUR MASTER FILES
-# ============================================================
-
-INPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\11-09-26\rectif 11-09")
-
-
-# ============================================================
-# 2. OUTPUT FOLDER
-# ============================================================
-
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT_FOLDER = INPUT_FOLDER / f"TELEPHONE_OUTPUT_{timestamp}"
-OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
-
-
-# ============================================================
-# 3. COLUMNS WE WANT TO KEEP
-# ============================================================
-
-BASE_COLUMNS = [
-    "STE",
-    "TVA",
-    "NOM",
-    "ADRESSE",
-    "NUMERO",
-    "COMPLEMENT",
-    "CP",
-    "VILLE"
-]
-
-PHONE_COLUMNS = [
-    "GSM",
-    "TEL1",
-    "TEL2",
-    "TEL3"
-]
-
-FINAL_COLUMNS = BASE_COLUMNS + [
-    "TELEPHONE"
-    
-]
-
-
-# ============================================================
-# 4. FIND MASTER FILES
-# ============================================================
-
-master_files = sorted(
-    [
-        f for f in INPUT_FOLDER.glob("MASTER_*.xlsx")
-        if not f.name.startswith("~$")
-    ]
-)
-
-print(f"\n{len(master_files)} Master files found.\n")
-
-
-# ============================================================
-# 5. PROCESS EACH MASTER SEPARATELY
-# ============================================================
-
-for master_file in master_files:
-
-    print("=" * 70)
-    print(f"Processing: {master_file.name}")
-    print("=" * 70)
-
-    # --------------------------------------------------------
-    # OPEN ONE MASTER
-    # --------------------------------------------------------
-
-    wb_in = load_workbook(
-        master_file,
-        read_only=True,
-        data_only=False
-    )
-
-    ws_in = wb_in.active
-
-    # --------------------------------------------------------
-    # READ HEADER
-    # --------------------------------------------------------
-
-    header = next(ws_in.iter_rows(values_only=True))
-
-    header_map = {
-        str(value).strip().upper(): index
-        for index, value in enumerate(header)
-        if value is not None
-    }
-
-    # --------------------------------------------------------
-    # CHECK REQUIRED COLUMNS
-    # --------------------------------------------------------
-
-    required_columns = BASE_COLUMNS + PHONE_COLUMNS 
-
-    missing_columns = [
-        column
-        for column in required_columns
-        if column.upper() not in header_map
+    base_data = [
+        row[col]
+        for col in base_columns
     ]
 
-    if missing_columns:
-        print(f"❌ Missing columns: {missing_columns}")
-        wb_in.close()
-        continue
+    for phone_col in phone_columns:
 
-    # --------------------------------------------------------
-    # CREATE ONE OUTPUT FILE FOR THIS MASTER
-    # --------------------------------------------------------
+        phone = row[phone_col]
 
-    wb_out = Workbook(write_only=True)
-    ws_out = wb_out.create_sheet("DATA")
+        # Only ignore empty cells
+        if pd.notna(phone) and phone != "":
 
-    # Header
-    ws_out.append(FINAL_COLUMNS)
-
-    # --------------------------------------------------------
-    # PROCESS ROWS
-    # --------------------------------------------------------
-
-    output_rows = 0
-
-    for row in ws_in.iter_rows(
-        min_row=2,
-        values_only=True
-    ):
-
-        # Company information
-        base_data = [
-            row[header_map[column.upper()]]
-            for column in BASE_COLUMNS
-        ]
-
-       
-        # ----------------------------------------------------
-        # GET GSM + TEL1 + TEL2 + TEL3
-        # ----------------------------------------------------
-
-        phones = []
-
-        for phone_column in PHONE_COLUMNS:
-
-            value = row[header_map[phone_column.upper()]]
-
-            # Keep the value exactly as it is
-            # Only ignore completely empty cells
-            if value is not None and value != "":
-                phones.append(value)
-
-        # ----------------------------------------------------
-        # ONE PHONE = ONE ROW
-        # ----------------------------------------------------
-
-        if phones:
-
-            for phone in phones:
-
-                output_row = (
-                    base_data
-                    + [phone]
-                   
-                )
-
-                ws_out.append(output_row)
-                output_rows += 1
-
-        # ----------------------------------------------------
-        # IF NO PHONE, KEEP THE ORIGINAL ROW
-        # ----------------------------------------------------
-
-        else:
-
-            output_row = (
-                base_data
-                + [""]
-               
+            rows.append(
+                base_data + [phone]
             )
 
-            ws_out.append(output_row)
-            output_rows += 1
 
-    # --------------------------------------------------------
-    # SAVE EXACTLY ONE OUTPUT FOR THIS MASTER
-    # --------------------------------------------------------
+# ============================================================
+# CREATE FINAL DATAFRAME
+# ============================================================
 
-    output_file = (
-        OUTPUT_FOLDER
-        / f"{master_file.stem}_TELEPHONE.xlsx"
-    )
-
-    wb_out.save(output_file)
-    wb_in.close()
-
-    print(f"✅ Finished: {master_file.name}")
-    print(f"   Output rows: {output_rows:,}")
-    print(f"   Output file: {output_file.name}")
-    print()
+result = pd.DataFrame(
+    rows,
+    columns=base_columns + ["TELEPHONE"]
+)
 
 
 # ============================================================
-# 6. FINISHED
+# SAVE
 # ============================================================
 
-print("=" * 70)
-print("ALL MASTER FILES FINISHED")
-print("=" * 70)
+result.to_excel(
+    output_file,
+    index=False
+)
 
-print(f"\nOutput folder:")
-print(OUTPUT_FOLDER)
+
+# ============================================================
+# RESULT
+# ============================================================
+
+print("=" * 60)
+print("DONE")
+print("=" * 60)
+print(f"Input : {input_file}")
+print(f"Output: {output_file}")
+print(f"Telephone rows: {len(result):,}")
+print("=" * 60)
