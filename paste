@@ -1,63 +1,58 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, regexp_replace, trim, lit, monotonically_increasing_id
 import os
-from openpyxl import Workbook
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, regexp_replace, trim
 
 # ============================================================
-# SPARK
+# 1. START SPARK
 # ============================================================
 
 spark = (
     SparkSession.builder
     .master("local[*]")
-    .appName("KBO_CONNECT_ALL_TO_EXCEL")
+    .appName("KBO_REAL_JOIN_TO_EXCEL")
     .getOrCreate()
 )
 
 spark.sparkContext.setLogLevel("WARN")
 
 # ============================================================
-# PATHS
+# 2. PATHS
 # ============================================================
 
 DATA_DIR = r"C:\Users\Sunlight\Downloads\KBO_0485_WORK\data"
 
-OUTPUT_DIR = r"C:\Users\Sunlight\Desktop\17-09-26\KBO_CONNECTED_EXCEL"
+OUTPUT_DIR = r"C:\Users\Sunlight\Desktop\17-09-26\KBO_FINAL_EXCEL"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ============================================================
-# FILES
+# 3. FILES TO JOIN
 # ============================================================
 
-files = [
+FILES = [
     "enterprise.csv",
     "denomination.csv",
     "address.csv",
     "contact.csv",
     "activity.csv",
     "branch.csv",
-    "establishment.csv",
-    "code.csv",
-    "meta.csv"
+    "establishment.csv"
 ]
 
-# Excel maximum is 1,048,576 rows.
-# We use 500,000 DATA rows per Excel file.
+# 500,000 data rows per Excel file
 ROWS_PER_EXCEL = 500_000
 
+
 # ============================================================
-# READ ALL FILES
+# 4. FUNCTION: READ KBO FILE
 # ============================================================
 
-all_tables = []
-
-for filename in files:
+def read_kbo(filename):
 
     path = os.path.join(DATA_DIR, filename)
 
     print("=" * 70)
-    print("Reading:", filename)
+    print("READING:", filename)
 
     df = (
         spark.read
@@ -69,216 +64,342 @@ for filename in files:
 
     print("Columns:", len(df.columns))
 
-    # --------------------------------------------------------
-    # Find KBO key
-    # --------------------------------------------------------
-
-    key_column = None
-
+    # Find enterprise/entity number
     if "EnterpriseNumber" in df.columns:
+
         key_column = "EnterpriseNumber"
 
     elif "EntityNumber" in df.columns:
+
         key_column = "EntityNumber"
-
-    # --------------------------------------------------------
-    # Add KBO_KEY
-    # --------------------------------------------------------
-
-    if key_column:
-
-        df = df.withColumn(
-            "KBO_KEY",
-            regexp_replace(
-                trim(col(key_column)),
-                "[^0-9]",
-                ""
-            )
-        )
-
-        print("Key:", key_column)
-
-        df = df.withColumn(
-            "SOURCE",
-            lit(filename)
-        )
-
-        all_tables.append(df)
 
     else:
 
-        print("NO ENTERPRISE/ENTITY NUMBER -> skipped")
+        raise ValueError(
+            f"{filename} does not contain EnterpriseNumber or EntityNumber"
+        )
 
-    print()
+    # --------------------------------------------------------
+    # Create common KBO_KEY
+    # --------------------------------------------------------
 
-# ============================================================
-# CONNECT ALL TABLES
-# ============================================================
-
-print("=" * 70)
-print("Connecting all tables...")
-print("=" * 70)
-
-# Get every column appearing in every table
-all_columns = set()
-
-for df in all_tables:
-    all_columns.update(df.columns)
-
-all_columns = list(all_columns)
-
-print("Total columns in final table:", len(all_columns))
-
-# ============================================================
-# MAKE SAME STRUCTURE
-# ============================================================
-
-prepared = []
-
-for df in all_tables:
-
-    for c in all_columns:
-
-        if c not in df.columns:
-
-            df = df.withColumn(
-                c,
-                lit(None).cast("string")
-            )
-
-    df = df.select(all_columns)
-
-    prepared.append(df)
-
-# ============================================================
-# UNION
-# ============================================================
-
-result = prepared[0]
-
-for df in prepared[1:]:
-
-    result = result.unionByName(
-        df,
-        allowMissingColumns=True
+    df = df.withColumn(
+        "KBO_KEY",
+        regexp_replace(
+            trim(col(key_column)),
+            "[^0-9]",
+            ""
+        )
     )
 
-print("All tables connected.")
+    print("Key:", key_column)
+
+    return df
+
 
 # ============================================================
-# COUNT
+# 5. READ ENTERPRISE
 # ============================================================
 
+enterprise = read_kbo("enterprise.csv")
+
+
+# ============================================================
+# 6. RENAME COLUMNS TO AVOID COLLISIONS
+# ============================================================
+
+def prepare_for_join(df, source_name):
+
+    new_columns = []
+
+    for c in df.columns:
+
+        if c == "KBO_KEY":
+
+            new_columns.append(col(c))
+
+        else:
+
+            # Keep the original column name but prefix it
+            # with the source table.
+            new_columns.append(
+                col(c).alias(f"{source_name}_{c}")
+            )
+
+    return df.select(*new_columns)
+
+
+enterprise = prepare_for_join(
+    enterprise,
+    "enterprise"
+)
+
+
+# ============================================================
+# 7. REAL JOIN FUNCTION
+# ============================================================
+
+def join_table(current_df, filename):
+
+    print()
+    print("=" * 70)
+    print("JOINING:", filename)
+    print("=" * 70)
+
+    df = read_kbo(filename)
+
+    source_name = os.path.splitext(filename)[0]
+
+    df = prepare_for_join(
+        df,
+        source_name
+    )
+
+    # --------------------------------------------------------
+    # REAL JOIN ON KBO_KEY
+    # --------------------------------------------------------
+
+    joined = current_df.join(
+        df,
+        on="KBO_KEY",
+        how="left"
+    )
+
+    print("JOINED:", filename)
+
+    return joined
+
+
+# ============================================================
+# 8. JOIN EVERYTHING
+# ============================================================
+
+result = enterprise
+
+for filename in FILES[1:]:
+
+    result = join_table(
+        result,
+        filename
+    )
+
+
+# ============================================================
+# 9. SHOW FINAL STRUCTURE
+# ============================================================
+
+print()
 print("=" * 70)
-print("Counting final rows...")
+print("ALL TABLES JOINED")
+print("=" * 70)
+
+print("Number of columns:", len(result.columns))
+
+print("Columns:")
+
+for c in result.columns:
+    print(" -", c)
+
+
+# ============================================================
+# 10. COUNT FINAL ROWS
+# ============================================================
+
+print()
+print("=" * 70)
+print("COUNTING FINAL JOINED ROWS")
 print("=" * 70)
 
 total_rows = result.count()
 
-print("TOTAL ROWS:", total_rows)
+print("FINAL ROWS:", total_rows)
+
 
 # ============================================================
-# ADD ROW ID
+# 11. CALCULATE NUMBER OF EXCEL FILES
 # ============================================================
+
+number_of_excel_files = (
+    total_rows + ROWS_PER_EXCEL - 1
+) // ROWS_PER_EXCEL
+
+print(
+    "EXCEL FILES NEEDED:",
+    number_of_excel_files
+)
+
+
+# ============================================================
+# 12. ADD ROW ID
+# ============================================================
+
+from pyspark.sql.functions import monotonically_increasing_id
 
 result = result.withColumn(
     "_ROW_ID",
     monotonically_increasing_id()
 )
 
-# ============================================================
-# NUMBER OF EXCEL FILES
-# ============================================================
-
-number_of_files = (
-    total_rows + ROWS_PER_EXCEL - 1
-) // ROWS_PER_EXCEL
-
-print("Excel files required:", number_of_files)
 
 # ============================================================
-# IMPORTANT:
-# Repartition into manageable partitions
+# 13. REPARTITION
 # ============================================================
 
-result = result.repartition(
-    max(number_of_files, 1)
+# Use more partitions than Excel files so Spark can work
+# in parallel.
+
+num_partitions = max(
+    number_of_excel_files * 2,
+    100
 )
 
-# ============================================================
-# WRITE EXCEL
-# ============================================================
-
-columns = [
-    c for c in result.columns
-    if c != "_ROW_ID"
-]
-
-print("=" * 70)
-print("Writing Excel files...")
-print("=" * 70)
-
-def write_partition(iterator):
-
-    from openpyxl import Workbook
-
-    rows = list(iterator)
-
-    if not rows:
-        return
-
-    # Partition number is not directly available here,
-    # so each Spark partition writes its own Excel file.
-
-    import uuid
-
-    filename = (
-        "KBO_part_"
-        + str(uuid.uuid4())
-        + ".xlsx"
-    )
-
-    output_file = os.path.join(
-        OUTPUT_DIR,
-        filename
-    )
-
-    wb = Workbook(
-        write_only=True
-    )
-
-    ws = wb.create_sheet("KBO")
-
-    # Header
-    ws.append(columns)
-
-    # Data
-    for row in rows:
-
-        row_dict = row.asDict()
-
-        ws.append([
-            row_dict.get(c)
-            for c in columns
-        ])
-
-    wb.save(output_file)
-
-    print("Created:", output_file)
+result = result.repartition(
+    num_partitions
+)
 
 
 # ============================================================
-# RUN
+# 14. WRITE EXCEL
 # ============================================================
-
-result.rdd.mapPartitions(
-    write_partition
-).count()
 
 print()
 print("=" * 70)
-print("DONE")
+print("STARTING EXCEL WRITING")
+print("=" * 70)
+
+from openpyxl import Workbook
+
+
+columns = [
+    c
+    for c in result.columns
+    if c != "_ROW_ID"
+]
+
+
+def write_partition(partition_index, iterator):
+
+    from openpyxl import Workbook
+    import os
+
+    # --------------------------------------------------------
+    # One partition can contain many Excel files.
+    # We split every 500,000 rows.
+    # --------------------------------------------------------
+
+    excel_number = 0
+    row_number = 0
+
+    workbook = None
+    worksheet = None
+    output_file = None
+
+    def start_new_workbook():
+
+        nonlocal workbook
+        nonlocal worksheet
+        nonlocal output_file
+        nonlocal excel_number
+        nonlocal row_number
+
+        if workbook is not None:
+
+            workbook.save(output_file)
+            workbook.close()
+
+        excel_number += 1
+
+        output_file = os.path.join(
+            OUTPUT_DIR,
+            f"KBO_JOIN_part_{partition_index:03d}_{excel_number:03d}.xlsx"
+        )
+
+        workbook = Workbook(
+            write_only=True
+        )
+
+        worksheet = workbook.create_sheet(
+            "KBO"
+        )
+
+        worksheet.append(columns)
+
+        row_number = 0
+
+    # --------------------------------------------------------
+    # Process rows
+    # --------------------------------------------------------
+
+    for row in iterator:
+
+        # Start first workbook
+        if workbook is None:
+
+            start_new_workbook()
+
+        # If current Excel reached 500k rows,
+        # create another one.
+        if row_number >= ROWS_PER_EXCEL:
+
+            start_new_workbook()
+
+        values = []
+
+        for c in columns:
+
+            value = row[c]
+
+            if value is None:
+                value = ""
+
+            values.append(
+                str(value)
+            )
+
+        worksheet.append(values)
+
+        row_number += 1
+
+    # --------------------------------------------------------
+    # Save last workbook
+    # --------------------------------------------------------
+
+    if workbook is not None:
+
+        workbook.save(output_file)
+        workbook.close()
+
+    return iter([1])
+
+
+# ============================================================
+# 15. EXECUTE
+# ============================================================
+
+(
+    result
+    .rdd
+    .mapPartitionsWithIndex(write_partition)
+    .count()
+)
+
+
+# ============================================================
+# 16. FINISHED
+# ============================================================
+
+print()
+print("=" * 70)
+print("KBO JOIN FINISHED")
 print("=" * 70)
 
 print("Output folder:")
 print(OUTPUT_DIR)
+
+print()
+print("FINAL ROWS:", total_rows)
+
+print(
+    "Excel files requested:",
+    number_of_excel_files
+)
