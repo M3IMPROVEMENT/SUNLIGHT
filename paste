@@ -1,72 +1,139 @@
 import pandas as pd
-import glob
 import os
 
-# Folder containing the Excel files
-folder_path = r"C:\Users\Sunlight\Desktop\11-09-26\rectif 11-09"
+# ============================================================
+# 1. INPUT FILE
+# ============================================================
 
-# Final columns required
-final_columns = [
-    "STE", "TVA", "NOM", "ADRESSE", "NUMERO",
-    "COMPLEMENT", "CP", "VILLE", "GSM",
-    "TEL1", "TEL2", "TEL3"
+input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
+
+# Output file
+output_file = os.path.splitext(input_file)[0] + "_telephone.xlsx"
+
+
+# ============================================================
+# 2. COLUMNS
+# ============================================================
+
+# Columns containing telephone numbers
+phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
+
+# All other information to keep
+info_columns = [
+    "STE",
+    "TVA",
+    "NOM",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE"
 ]
 
-all_data = []
 
-# Read all Excel files
-files = glob.glob(os.path.join(folder_path, "*.xlsx"))
+# ============================================================
+# 3. READ EXCEL
+# ============================================================
 
-for file in files:
+df = pd.read_excel(input_file, dtype=str)
 
-    # Don't read the output file again
-    if os.path.basename(file) == "master_final_table.xlsx":
-        continue
+# Remove spaces from column names
+df.columns = df.columns.str.strip()
 
-    print("Reading:", os.path.basename(file))
 
-    df = pd.read_excel(file)
+# ============================================================
+# 4. MAKE SURE PHONE COLUMNS EXIST
+# ============================================================
 
-    # Clean column names
-    df.columns = (
-        df.columns
+for col in phone_columns:
+    if col not in df.columns:
+        df[col] = ""
+
+
+# Make sure information columns exist
+for col in info_columns:
+    if col not in df.columns:
+        df[col] = ""
+
+
+# ============================================================
+# 5. KEEP ONLY THE REQUIRED INFORMATION
+# ============================================================
+
+df = df[info_columns + phone_columns].copy()
+
+
+# ============================================================
+# 6. CLEAN PHONE COLUMNS
+# ============================================================
+
+for col in phone_columns:
+    df[col] = (
+        df[col]
+        .fillna("")
         .astype(str)
         .str.strip()
-        .str.upper()
+        .str.replace(r"\.0$", "", regex=True)
     )
 
-    # Keep only existing required columns
-    df = df[[col for col in final_columns if col in df.columns]]
 
-    # Add missing columns
-    for col in final_columns:
-        if col not in df.columns:
-            df[col] = ""
+# ============================================================
+# 7. PUT GSM + TEL1 + TEL2 + TEL3 INTO ONE COLUMN
+# ============================================================
 
-    # Remove completely empty rows
-    df = df.replace(r'^\s*$', pd.NA, regex=True)
-    df = df.dropna(subset=final_columns, how="all")
-
-    # Add source file
-    df["SOURCE"] = os.path.basename(file)
-
-    # Reorder columns
-    df = df[final_columns + ["SOURCE"]]
-
-    all_data.append(df)
-
-# Merge all files
-master = pd.concat(all_data, ignore_index=True)
-
-# Save ONE output file
-output_file = os.path.join(
-    folder_path,
-    "master_final_table.xlsx"
+result = df.melt(
+    id_vars=info_columns,
+    value_vars=phone_columns,
+    var_name="SOURCE",
+    value_name="TELEPHONE"
 )
 
-master.to_excel(output_file, index=False)
 
-print("\nDONE")
-print("Files merged:", len(all_data))
-print("Rows in master:", len(master))
-print("Output:", output_file)
+# ============================================================
+# 8. REMOVE EMPTY TELEPHONE ROWS
+# ============================================================
+
+result["TELEPHONE"] = result["TELEPHONE"].str.strip()
+
+result = result[result["TELEPHONE"] != ""].copy()
+
+
+# ============================================================
+# 9. REMOVE THE SOURCE COLUMN
+# ============================================================
+
+result = result.drop(columns=["SOURCE"])
+
+
+# ============================================================
+# 10. FINAL COLUMN ORDER
+# ============================================================
+
+final_columns = [
+    "STE",
+    "TVA",
+    "NOM",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE",
+    "TELEPHONE"
+]
+
+result = result[final_columns]
+
+
+# ============================================================
+# 11. SAVE
+# ============================================================
+
+result.to_excel(output_file, index=False)
+
+print("========================================")
+print("DONE!")
+print("========================================")
+print(f"Input file : {input_file}")
+print(f"Output file: {output_file}")
+print(f"Total telephone rows: {len(result):,}")
+print("========================================")
