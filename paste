@@ -1,17 +1,13 @@
-import pandas as pd
 from pathlib import Path
+from openpyxl import load_workbook, Workbook
 
 
 # ============================================================
-# 1. YOUR TWO EXCEL FILES
+# 1. INPUT MERGED FILE
 # ============================================================
 
-file1 = Path(
-    r"C:\Users\Sunlight\Desktop\15-09-26\MERIAME15_9\Nouveau dossier\FILE1.xlsx"
-)
-
-file2 = Path(
-    r"C:\Users\Sunlight\Desktop\15-09-26\MERIAME15_9\Nouveau dossier\FILE2.xlsx"
+INPUT_FILE = Path(
+    r"C:\Users\Sunlight\Desktop\15-09-26\MERIAME15_9\Nouveau dossier\MERGED_WITH_SOURCE.xlsx"
 )
 
 
@@ -19,58 +15,211 @@ file2 = Path(
 # 2. OUTPUT FILE
 # ============================================================
 
-output_file = file1.parent / "MERGED_WITH_SOURCE.xlsx"
+OUTPUT_FILE = INPUT_FILE.parent / "MERGED_TELEPHONE.xlsx"
 
 
 # ============================================================
-# 3. READ THE TWO FILES
+# 3. COLUMNS
 # ============================================================
 
-df1 = pd.read_excel(file1, dtype=object)
-df2 = pd.read_excel(file2, dtype=object)
+BASE_COLUMNS = [
+    "STE",
+    "TVA",
+    "NOM",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE"
+]
+
+PHONE_COLUMNS = [
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3"
+]
+
+# SOURCE is kept
+FINAL_COLUMNS = BASE_COLUMNS + [
+    "TELEPHONE",
+    "SOURCE"
+]
 
 
 # ============================================================
-# 4. ADD SOURCE COLUMN
+# 4. OPEN INPUT FILE
 # ============================================================
 
-df1["SOURCE"] = file1.name
-df2["SOURCE"] = file2.name
-
-
-# ============================================================
-# 5. MERGE THE TWO FILES
-# ============================================================
-
-result = pd.concat(
-    [df1, df2],
-    ignore_index=True
+wb_in = load_workbook(
+    INPUT_FILE,
+    read_only=True,
+    data_only=False
 )
 
-
-# ============================================================
-# 6. SAVE
-# ============================================================
-
-result.to_excel(
-    output_file,
-    index=False
-)
+ws_in = wb_in.active
 
 
 # ============================================================
-# 7. REPORT
+# 5. READ HEADER
 # ============================================================
 
-print("=" * 60)
-print("DONE")
-print("=" * 60)
+header = next(ws_in.iter_rows(values_only=True))
 
-print(f"File 1 rows : {len(df1):,}")
-print(f"File 2 rows : {len(df2):,}")
-print(f"Total rows  : {len(result):,}")
+header_map = {
+    str(value).strip().upper(): index
+    for index, value in enumerate(header)
+    if value is not None
+}
+
+
+# ============================================================
+# 6. CHECK REQUIRED COLUMNS
+# ============================================================
+
+required_columns = BASE_COLUMNS + PHONE_COLUMNS + ["SOURCE"]
+
+missing_columns = [
+    column
+    for column in required_columns
+    if column.upper() not in header_map
+]
+
+if missing_columns:
+    print("❌ Missing columns:")
+    print(missing_columns)
+    wb_in.close()
+    raise SystemExit
+
+
+# ============================================================
+# 7. CREATE OUTPUT
+# ============================================================
+
+wb_out = Workbook(write_only=True)
+ws_out = wb_out.create_sheet("DATA")
+
+ws_out.append(FINAL_COLUMNS)
+
+
+# ============================================================
+# 8. COUNTERS
+# ============================================================
+
+gsm_count = 0
+tel1_count = 0
+tel2_count = 0
+tel3_count = 0
+
+telephone_count = 0
+no_phone_count = 0
+output_rows = 0
+
+
+# ============================================================
+# 9. PROCESS EVERY ROW
+# ============================================================
+
+for row in ws_in.iter_rows(
+    min_row=2,
+    values_only=True
+):
+
+    # --------------------------------------------------------
+    # COMPANY INFORMATION
+    # --------------------------------------------------------
+
+    base_data = [
+        row[header_map[column.upper()]]
+        for column in BASE_COLUMNS
+    ]
+
+    source = row[header_map["SOURCE"]]
+
+
+    # --------------------------------------------------------
+    # GET GSM / TEL1 / TEL2 / TEL3
+    # --------------------------------------------------------
+
+    phones = []
+
+    value = row[header_map["GSM"]]
+    if value is not None and value != "":
+        phones.append(value)
+        gsm_count += 1
+
+    value = row[header_map["TEL1"]]
+    if value is not None and value != "":
+        phones.append(value)
+        tel1_count += 1
+
+    value = row[header_map["TEL2"]]
+    if value is not None and value != "":
+        phones.append(value)
+        tel2_count += 1
+
+    value = row[header_map["TEL3"]]
+    if value is not None and value != "":
+        phones.append(value)
+        tel3_count += 1
+
+
+    # --------------------------------------------------------
+    # ONE PHONE = ONE ROW
+    # --------------------------------------------------------
+
+    if phones:
+
+        for phone in phones:
+
+            ws_out.append(
+                base_data + [phone, source]
+            )
+
+            telephone_count += 1
+            output_rows += 1
+
+
+    # --------------------------------------------------------
+    # NO PHONE → KEEP THE ROW
+    # --------------------------------------------------------
+
+    else:
+
+        ws_out.append(
+            base_data + ["", source]
+        )
+
+        no_phone_count += 1
+        output_rows += 1
+
+
+# ============================================================
+# 10. SAVE
+# ============================================================
+
+wb_out.save(OUTPUT_FILE)
+
+wb_in.close()
+
+
+# ============================================================
+# 11. FINAL REPORT
+# ============================================================
 
 print()
-print(f"Output file : {output_file}")
+print("=" * 70)
+print("DONE")
+print("=" * 70)
 
-print("=" * 60)
+print(f"GSM              : {gsm_count:,}")
+print(f"TEL1             : {tel1_count:,}")
+print(f"TEL2             : {tel2_count:,}")
+print(f"TEL3             : {tel3_count:,}")
+print("-" * 70)
+print(f"TOTAL TELEPHONES : {telephone_count:,}")
+print(f"NO PHONE ROWS    : {no_phone_count:,}")
+print(f"TOTAL OUTPUT ROWS: {output_rows:,}")
+print("-" * 70)
+print(f"OUTPUT FILE      : {OUTPUT_FILE}")
+print("=" * 70)
