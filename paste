@@ -1,43 +1,10 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import (
-    col,
-    regexp_replace,
-    trim,
-    upper
-)
 
 spark = (
     SparkSession.builder
-    .appName("KBO_OpenData")
-    .config("spark.sql.shuffle.partitions", "200")
+    .master("local[*]")
+    .appName("KBO")
     .getOrCreate()
 )
 
-spark.sparkContext.setLogLevel("WARN")
-
-DATA_DIR = r"C:\Users\Sunlight\Downloads\KBO_0485_WORK\data"
-
-enterprise = spark.read \
-    .option("header", True) \
-    .option("inferSchema", False) \
-    .csv(DATA_DIR + "/enterprise.csv")
-
-denomination = spark.read \
-    .option("header", True) \
-    .option("inferSchema", False) \
-    .csv(DATA_DIR + "/denomination.csv")
-
-address = spark.read \
-    .option("header", True) \
-    .option("inferSchema", False) \
-    .csv(DATA_DIR + "/address.csv")
-
-contact = spark.read \
-    .option("header", True) \
-    .option("inferSchema", False) \
-    .csv(DATA_DIR + "/contact.csv")
-
-print("Enterprise:", enterprise.count())
-print("Denomination:", denomination.count())
-print("Address:", address.count())
-print("Contact:", contact.count())
+print(spark.version)
