@@ -1,1 +1,11 @@
-python -c "import pyspark; print(pyspark.__version__)"
+from pyspark.sql import SparkSession
+
+spark = (
+    SparkSession.builder
+    .master("local[*]")
+    .appName("KBO_TEST")
+    .getOrCreate()
+)
+
+print("Spark is working!")
+print("Spark version:", spark.version)
