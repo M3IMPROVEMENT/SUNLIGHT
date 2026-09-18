@@ -1,6 +1,6 @@
 ---------------------------------------------------------------------------
 Py4JJavaError                             Traceback (most recent call last)
-Cell In[3], line 381
+Cell In[4], line 381
     377 # ============================================================
     378 
     379 (
@@ -53,8 +53,8 @@ File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\py4j\protocol.p
     332         "An error occurred while calling {0}{1}{2}. Trace:\n{3}\n".
     333         format(target_id, ".", name, value))
 
-Py4JJavaError: An error occurred while calling o1741.javaToPython.
-: org.apache.spark.SparkException: Job aborted due to stage failure: Task 2 in stage 52.0 failed 1 times, most recent failure: Lost task 2.0 in stage 52.0 (TID 151) (Sunlight-call executor driver): java.io.IOException: Espace insuffisant sur le disque
+Py4JJavaError: An error occurred while calling o2073.javaToPython.
+: org.apache.spark.SparkException: Job aborted due to stage failure: Task 3 in stage 97.0 failed 1 times, most recent failure: Lost task 3.0 in stage 97.0 (TID 237) (Sunlight-call executor driver): java.io.IOException: Espace insuffisant sur le disque
 	at java.base/java.io.FileOutputStream.writeBytes(Native Method)
 	at java.base/java.io.FileOutputStream.write(FileOutputStream.java:349)
 	at org.apache.spark.storage.TimeTrackingOutputStream.write(TimeTrackingOutputStream.java:59)
