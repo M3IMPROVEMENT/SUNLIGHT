@@ -1,158 +1,569 @@
----------------------------------------------------------------------------
-Py4JJavaError                             Traceback (most recent call last)
-Cell In[4], line 381
-    377 # ============================================================
-    378 
-    379 (
-    380     result
---> 381     .rdd
-    382     .mapPartitionsWithIndex(write_partition)
-    383     .count()
-    384 )
+# ============================================================
+# KBO OPEN DATA - MERGE BY KBO_KEY
+# KEEP ALL ORIGINAL HEADERS
+# REMOVE DUPLICATE VALUES
+# KEEP ALL DIFFERENT GSM / TEL / CONTACT VALUES
+# PYSPARK VERSION
+# ============================================================
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\functools.py:1126, in cached_property.__get__(self, instance, owner)
-   1124 val = cache.get(self.attrname, _NOT_FOUND)
-   1125 if val is _NOT_FOUND:
--> 1126     val = self.func(instance)
-   1127     try:
-   1128         cache[self.attrname] = val
+import os
+import re
+import shutil
+from pathlib import Path
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pyspark\sql\classic\dataframe.py:159, in DataFrame.rdd(self)
-    155 @cached_property
-    156 def rdd(self) -> "RDD[Row]":
-    157     from pyspark.core.rdd import RDD
---> 159     jrdd = self._jdf.javaToPython()
-    160     return RDD(jrdd, self.sparkSession._sc, BatchedSerializer(CPickleSerializer()))
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql.types import StringType
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\py4j\java_gateway.py:1362, in JavaMember.__call__(self, *args)
-   1356 command = proto.CALL_COMMAND_NAME +\
-   1357     self.command_header +\
-   1358     args_command +\
-   1359     proto.END_COMMAND_PART
-   1361 answer = self.gateway_client.send_command(command)
--> 1362 return_value = get_return_value(
-   1363     answer, self.gateway_client, self.target_id, self.name)
-   1365 for temp_arg in temp_args:
-   1366     if hasattr(temp_arg, "_detach"):
+import xlsxwriter
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pyspark\errors\exceptions\captured.py:251, in capture_sql_exception.<locals>.deco(*a, **kw)
-    248 from py4j.protocol import Py4JJavaError
-    250 try:
---> 251     return f(*a, **kw)
-    252 except Py4JJavaError as e:
-    253     converted = convert_exception(e.java_exception)
 
-File ~\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\py4j\protocol.py:327, in get_return_value(answer, gateway_client, target_id, name)
-    325 value = OUTPUT_CONVERTER[type](answer[2:], gateway_client)
-    326 if answer[1] == REFERENCE_TYPE:
---> 327     raise Py4JJavaError(
-    328         "An error occurred while calling {0}{1}{2}.\n".
-    329         format(target_id, ".", name), value)
-    330 else:
-    331     raise Py4JError(
-    332         "An error occurred while calling {0}{1}{2}. Trace:\n{3}\n".
-    333         format(target_id, ".", name, value))
+# ============================================================
+# 1. PATHS
+# ============================================================
 
-Py4JJavaError: An error occurred while calling o2073.javaToPython.
-: org.apache.spark.SparkException: Job aborted due to stage failure: Task 3 in stage 97.0 failed 1 times, most recent failure: Lost task 3.0 in stage 97.0 (TID 237) (Sunlight-call executor driver): java.io.IOException: Espace insuffisant sur le disque
-	at java.base/java.io.FileOutputStream.writeBytes(Native Method)
-	at java.base/java.io.FileOutputStream.write(FileOutputStream.java:349)
-	at org.apache.spark.storage.TimeTrackingOutputStream.write(TimeTrackingOutputStream.java:59)
-	at org.apache.spark.io.MutableCheckedOutputStream.write(MutableCheckedOutputStream.scala:43)
-	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
-	at java.base/java.io.BufferedOutputStream.write(BufferedOutputStream.java:127)
-	at net.jpountz.lz4.LZ4BlockOutputStream.flushBufferedData(LZ4BlockOutputStream.java:225)
-	at net.jpountz.lz4.LZ4BlockOutputStream.write(LZ4BlockOutputStream.java:178)
-	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
-	at java.base/java.io.BufferedOutputStream.write(BufferedOutputStream.java:127)
-	at java.base/java.io.DataOutputStream.write(DataOutputStream.java:112)
-	at org.apache.spark.sql.catalyst.expressions.UnsafeRow.writeToStream(UnsafeRow.java:550)
-	at org.apache.spark.sql.execution.UnsafeRowSerializerInstance$$anon$1.writeValue(UnsafeRowSerializer.scala:69)
-	at org.apache.spark.storage.DiskBlockObjectWriter.write(DiskBlockObjectWriter.scala:337)
-	at org.apache.spark.shuffle.sort.BypassMergeSortShuffleWriter.write(BypassMergeSortShuffleWriter.java:185)
-	at org.apache.spark.shuffle.ShuffleWriteProcessor.write(ShuffleWriteProcessor.scala:57)
-	at org.apache.spark.scheduler.ShuffleMapTask.runTask(ShuffleMapTask.scala:111)
-	at org.apache.spark.scheduler.ShuffleMapTask.runTask(ShuffleMapTask.scala:54)
-	at org.apache.spark.TaskContext.runTaskWithListeners(TaskContext.scala:206)
-	at org.apache.spark.scheduler.Task.run(Task.scala:147)
-	at org.apache.spark.executor.Executor$TaskRunner.$anonfun$run$4(Executor.scala:894)
-	at org.apache.spark.util.SparkErrorUtils.tryWithSafeFinally(SparkErrorUtils.scala:86)
-	at org.apache.spark.util.SparkErrorUtils.tryWithSafeFinally$(SparkErrorUtils.scala:83)
-	at org.apache.spark.util.Utils$.tryWithSafeFinally(Utils.scala:97)
-	at org.apache.spark.executor.Executor$TaskRunner.run(Executor.scala:897)
-	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136)
-	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635)
-	at java.base/java.lang.Thread.run(Thread.java:840)
+INPUT_FOLDER = r"C:\Users\Sunlight\Desktop\KBO_DATA"
 
-Driver stacktrace:
-	at org.apache.spark.scheduler.DAGScheduler.$anonfun$abortStage$3(DAGScheduler.scala:3318)
-	at scala.Option.getOrElse(Option.scala:201)
-	at org.apache.spark.scheduler.DAGScheduler.$anonfun$abortStage$2(DAGScheduler.scala:3318)
-	at org.apache.spark.scheduler.DAGScheduler.$anonfun$abortStage$2$adapted(DAGScheduler.scala:3310)
-	at scala.collection.immutable.List.foreach(List.scala:323)
-	at org.apache.spark.scheduler.DAGScheduler.abortStage(DAGScheduler.scala:3310)
-	at org.apache.spark.scheduler.DAGScheduler.$anonfun$handleTaskSetFailed$1(DAGScheduler.scala:1363)
-	at org.apache.spark.scheduler.DAGScheduler.$anonfun$handleTaskSetFailed$1$adapted(DAGScheduler.scala:1363)
-	at scala.Option.foreach(Option.scala:437)
-	at org.apache.spark.scheduler.DAGScheduler.handleTaskSetFailed(DAGScheduler.scala:1363)
-	at org.apache.spark.scheduler.DAGSchedulerEventProcessLoop.doOnReceive(DAGScheduler.scala:3589)
-	at org.apache.spark.scheduler.DAGSchedulerEventProcessLoop.onReceive(DAGScheduler.scala:3517)
-	at org.apache.spark.scheduler.DAGSchedulerEventProcessLoop.onReceive(DAGScheduler.scala:3506)
-	at org.apache.spark.util.EventLoop$$anon$1.run(EventLoop.scala:50)
-	at org.apache.spark.util.Utils$.getTryWithCallerStacktrace(Utils.scala:1457)
-	at org.apache.spark.util.LazyTry.get(LazyTry.scala:61)
-	at org.apache.spark.sql.execution.SparkPlan.$anonfun$execute$1(SparkPlan.scala:201)
-	at org.apache.spark.sql.execution.SparkPlan.$anonfun$executeQuery$1(SparkPlan.scala:269)
-	at org.apache.spark.rdd.RDDOperationScope$.withScope(RDDOperationScope.scala:169)
-	at org.apache.spark.sql.execution.SparkPlan.executeQuery(SparkPlan.scala:266)
-	at org.apache.spark.sql.execution.SparkPlan.execute(SparkPlan.scala:197)
-	at org.apache.spark.sql.execution.QueryExecution.$anonfun$lazyToRdd$1(QueryExecution.scala:377)
-	at scala.util.Try$.apply(Try.scala:217)
-	at org.apache.spark.util.Utils$.doTryWithCallerStacktrace(Utils.scala:1407)
-	at org.apache.spark.util.Utils$.getTryWithCallerStacktrace(Utils.scala:1457)
-	at org.apache.spark.util.LazyTry.get(LazyTry.scala:61)
-	at org.apache.spark.sql.execution.QueryExecution.$anonfun$toRdd$1(QueryExecution.scala:391)
-	at org.apache.spark.sql.execution.QueryExecution.withAbortTransactionOnFailure(QueryExecution.scala:632)
-	at org.apache.spark.sql.execution.QueryExecution.toRdd(QueryExecution.scala:391)
-	at org.apache.spark.sql.classic.Dataset.javaToPython(Dataset.scala:2133)
-	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
-	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)
-	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:569)
-	at py4j.reflection.MethodInvoker.invoke(MethodInvoker.java:244)
-	at py4j.reflection.ReflectionEngine.invoke(ReflectionEngine.java:374)
-	at py4j.Gateway.invoke(Gateway.java:282)
-	at py4j.commands.AbstractCommand.invokeMethod(AbstractCommand.java:132)
-	at py4j.commands.CallCommand.execute(CallCommand.java:79)
-	at py4j.ClientServerConnection.waitForCommands(ClientServerConnection.java:184)
-	at py4j.ClientServerConnection.run(ClientServerConnection.java:108)
-	at java.base/java.lang.Thread.run(Thread.java:840)
-Caused by: java.io.IOException: Espace insuffisant sur le disque
-	at java.base/java.io.FileOutputStream.writeBytes(Native Method)
-	at java.base/java.io.FileOutputStream.write(FileOutputStream.java:349)
-	at org.apache.spark.storage.TimeTrackingOutputStream.write(TimeTrackingOutputStream.java:59)
-	at org.apache.spark.io.MutableCheckedOutputStream.write(MutableCheckedOutputStream.scala:43)
-	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
-	at java.base/java.io.BufferedOutputStream.write(BufferedOutputStream.java:127)
-	at net.jpountz.lz4.LZ4BlockOutputStream.flushBufferedData(LZ4BlockOutputStream.java:225)
-	at net.jpountz.lz4.LZ4BlockOutputStream.write(LZ4BlockOutputStream.java:178)
-	at java.base/java.io.BufferedOutputStream.flushBuffer(BufferedOutputStream.java:81)
-	at java.base/java.io.BufferedOutputStream.write(BufferedOutputStream.java:127)
-	at java.base/java.io.DataOutputStream.write(DataOutputStream.java:112)
-	at org.apache.spark.sql.catalyst.expressions.UnsafeRow.writeToStream(UnsafeRow.java:550)
-	at org.apache.spark.sql.execution.UnsafeRowSerializerInstance$$anon$1.writeValue(UnsafeRowSerializer.scala:69)
-	at org.apache.spark.storage.DiskBlockObjectWriter.write(DiskBlockObjectWriter.scala:337)
-	at org.apache.spark.shuffle.sort.BypassMergeSortShuffleWriter.write(BypassMergeSortShuffleWriter.java:185)
-	at org.apache.spark.shuffle.ShuffleWriteProcessor.write(ShuffleWriteProcessor.scala:57)
-	at org.apache.spark.scheduler.ShuffleMapTask.runTask(ShuffleMapTask.scala:111)
-	at org.apache.spark.scheduler.ShuffleMapTask.runTask(ShuffleMapTask.scala:54)
-	at org.apache.spark.TaskContext.runTaskWithListeners(TaskContext.scala:206)
-	at org.apache.spark.scheduler.Task.run(Task.scala:147)
-	at org.apache.spark.executor.Executor$TaskRunner.$anonfun$run$4(Executor.scala:894)
-	at org.apache.spark.util.SparkErrorUtils.tryWithSafeFinally(SparkErrorUtils.scala:86)
-	at org.apache.spark.util.SparkErrorUtils.tryWithSafeFinally$(SparkErrorUtils.scala:83)
-	at org.apache.spark.util.Utils$.tryWithSafeFinally(Utils.scala:97)
-	at org.apache.spark.executor.Executor$TaskRunner.run(Executor.scala:897)
-	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136)
-	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635)
-	... 1 more
+OUTPUT_FOLDER = r"C:\Users\Sunlight\Desktop\KBO_FINAL_MERGED"
+
+# Maximum data rows per Excel file
+# Excel maximum is 1,048,576 rows including header.
+# 500,000 is safer.
+ROWS_PER_EXCEL = 500_000
+
+
+# ============================================================
+# 2. CREATE OUTPUT FOLDER
+# ============================================================
+
+output_path = Path(OUTPUT_FOLDER)
+
+if output_path.exists():
+    print("Deleting previous output folder...")
+    shutil.rmtree(output_path)
+
+output_path.mkdir(parents=True, exist_ok=True)
+
+print("Output folder:", output_path)
+
+
+# ============================================================
+# 3. STOP OLD SPARK SESSION
+# ============================================================
+
+try:
+    spark.stop()
+except:
+    pass
+
+
+# ============================================================
+# 4. CREATE SPARK
+# ============================================================
+
+spark = (
+    SparkSession.builder
+    .appName("KBO_Merge_By_KBO_Key")
+    .master("local[*]")
+    .config("spark.sql.shuffle.partitions", "100")
+    .config("spark.driver.memory", "8g")
+    .config("spark.sql.adaptive.enabled", "true")
+    .getOrCreate()
+)
+
+spark.sparkContext.setLogLevel("WARN")
+
+print("Spark version:", spark.version)
+
+
+# ============================================================
+# 5. FIND CSV FILES
+# ============================================================
+
+csv_files = list(Path(INPUT_FOLDER).glob("*.csv"))
+
+if not csv_files:
+    raise FileNotFoundError(
+        f"No CSV files found in:\n{INPUT_FOLDER}"
+    )
+
+print("\nCSV files found:")
+for f in csv_files:
+    print(" -", f.name)
+
+print("\nTotal CSV files:", len(csv_files))
+
+
+# ============================================================
+# 6. FUNCTION TO FIND KBO KEY COLUMN
+# ============================================================
+
+def find_kbo_column(columns):
+
+    possible = [
+        "EnterpriseNumber",
+        "EntityNumber",
+        "enterpriseNumber",
+        "entityNumber"
+    ]
+
+    for wanted in possible:
+        for c in columns:
+            if c.lower() == wanted.lower():
+                return c
+
+    return None
+
+
+# ============================================================
+# 7. CREATE KBO_KEY
+# ============================================================
+
+def add_kbo_key(df):
+
+    key_column = find_kbo_column(df.columns)
+
+    if key_column is None:
+        return None, None
+
+    df = df.withColumn(
+        "KBO_KEY",
+        F.regexp_replace(
+            F.trim(F.col(key_column).cast("string")),
+            r"[^0-9]",
+            ""
+        )
+    )
+
+    # Remove empty KBO keys
+    df = df.filter(
+        F.col("KBO_KEY").isNotNull()
+        & (F.col("KBO_KEY") != "")
+    )
+
+    return df, key_column
+
+
+# ============================================================
+# 8. MAKE SAFE UNIQUE COLUMN NAMES
+# ============================================================
+
+def make_unique_columns(columns, source_name):
+
+    result = []
+    used = set()
+
+    for c in columns:
+
+        # KBO_KEY is our common key
+        if c == "KBO_KEY":
+            new_name = "KBO_KEY"
+
+        else:
+            new_name = c
+
+        # If duplicate column name exists,
+        # add source name.
+        if new_name in used:
+
+            base = f"{source_name}_{c}"
+            new_name = base
+
+            counter = 2
+
+            while new_name in used:
+                new_name = f"{base}_{counter}"
+                counter += 1
+
+        used.add(new_name)
+        result.append(new_name)
+
+    return result
+
+
+# ============================================================
+# 9. AGGREGATE EACH SOURCE SEPARATELY
+# ============================================================
+
+aggregated_tables = []
+
+for csv_file in csv_files:
+
+    source_name = csv_file.stem
+
+    print("\n" + "=" * 70)
+    print("PROCESSING:", csv_file.name)
+    print("=" * 70)
+
+    # --------------------------------------------------------
+    # Read CSV
+    # --------------------------------------------------------
+
+    df = (
+        spark.read
+        .option("header", "true")
+        .option("inferSchema", "false")
+        .option("multiLine", "true")
+        .option("escape", '"')
+        .csv(str(csv_file))
+    )
+
+    print("Original columns:", len(df.columns))
+
+    # --------------------------------------------------------
+    # Find KBO column
+    # --------------------------------------------------------
+
+    df, key_column = add_kbo_key(df)
+
+    if df is None:
+
+        print(
+            "No EnterpriseNumber / EntityNumber found."
+        )
+
+        # Save files such as code.csv/meta.csv separately later
+        continue
+
+    print("KBO column:", key_column)
+
+    # --------------------------------------------------------
+    # Rename columns to avoid collisions
+    #
+    # Keep original header meaning.
+    # Only prefix source name when necessary.
+    # --------------------------------------------------------
+
+    original_columns = [
+        c for c in df.columns
+        if c != "KBO_KEY"
+    ]
+
+    # We prefix source columns.
+    # This prevents collisions such as EntityNumber,
+    # Language, Type, etc.
+    renamed_columns = ["KBO_KEY"]
+
+    for c in original_columns:
+
+        # Keep source name in header so we know where it came from
+        new_name = f"{source_name}_{c}"
+
+        df = df.withColumnRenamed(c, new_name)
+
+        renamed_columns.append(new_name)
+
+    # --------------------------------------------------------
+    # Keep only required columns
+    # --------------------------------------------------------
+
+    df = df.select(renamed_columns)
+
+    # --------------------------------------------------------
+    # Remove EXACT duplicate rows first
+    # --------------------------------------------------------
+
+    df = df.dropDuplicates()
+
+    # --------------------------------------------------------
+    # Aggregate each column by KBO_KEY
+    #
+    # This is the important part.
+    #
+    # Instead of:
+    #
+    # denomination x activity x contact x address
+    #
+    # we first reduce EACH source to ONE row per KBO.
+    #
+    # Therefore there is no giant Cartesian multiplication.
+    # --------------------------------------------------------
+
+    aggregation_expressions = []
+
+    for c in renamed_columns:
+
+        if c == "KBO_KEY":
+            continue
+
+        aggregation_expressions.append(
+            F.concat_ws(
+                " | ",
+                F.sort_array(
+                    F.collect_set(
+                        F.when(
+                            F.trim(F.col(c)) != "",
+                            F.trim(F.col(c))
+                        )
+                    )
+                )
+            ).alias(c)
+        )
+
+    aggregated = (
+        df.groupBy("KBO_KEY")
+        .agg(*aggregation_expressions)
+    )
+
+    print(
+        f"Finished aggregation for {source_name}"
+    )
+
+    aggregated_tables.append(
+        (source_name, aggregated)
+    )
+
+
+# ============================================================
+# 10. CHECK
+# ============================================================
+
+if not aggregated_tables:
+
+    raise RuntimeError(
+        "No CSV containing EnterpriseNumber or EntityNumber was found."
+    )
+
+print("\n")
+print("=" * 70)
+print("TABLES READY FOR MERGE")
+print("=" * 70)
+
+for name, table in aggregated_tables:
+
+    print(
+        name,
+        "=>",
+        len(table.columns),
+        "columns"
+    )
+
+
+# ============================================================
+# 11. MERGE ALL AGGREGATED TABLES USING KBO_KEY
+# ============================================================
+
+print("\nMerging tables by KBO_KEY...")
+
+# First table
+merged = aggregated_tables[0][1]
+
+for source_name, table in aggregated_tables[1:]:
+
+    print("Connecting:", source_name)
+
+    merged = merged.join(
+        table,
+        on="KBO_KEY",
+        how="outer"
+    )
+
+
+# ============================================================
+# 12. REMOVE ANY POSSIBLE DUPLICATE COLUMN NAMES
+# ============================================================
+
+columns = merged.columns
+
+seen = set()
+final_columns = []
+
+for c in columns:
+
+    if c not in seen:
+
+        seen.add(c)
+        final_columns.append(c)
+
+    else:
+
+        print(
+            "Duplicate column detected:",
+            c
+        )
+
+merged = merged.select(final_columns)
+
+
+# ============================================================
+# 13. MOVE KBO_KEY TO FIRST COLUMN
+# ============================================================
+
+other_columns = [
+    c for c in merged.columns
+    if c != "KBO_KEY"
+]
+
+merged = merged.select(
+    ["KBO_KEY"] + other_columns
+)
+
+
+# ============================================================
+# 14. NUMBER OF FINAL KBOs
+# ============================================================
+
+print("\nCounting final KBO records...")
+
+final_count = merged.count()
+
+print(
+    "FINAL UNIQUE KBO RECORDS:",
+    f"{final_count:,}"
+)
+
+
+# ============================================================
+# 15. WRITE SPARK DATA DIRECTLY TO XLSX
+# ============================================================
+
+print("\nStarting Excel export...")
+
+# Repartition into reasonably sized partitions.
+#
+# This is NOT a join/shuffle explosion anymore because
+# we already have one row per KBO.
+#
+# Calculate approximately 200k rows per partition.
+# ============================================================
+
+target_partitions = max(
+    1,
+    int(final_count / 200_000) + 1
+)
+
+print(
+    "Excel partitions:",
+    target_partitions
+)
+
+merged = merged.repartition(target_partitions)
+
+
+# ============================================================
+# 16. WRITE EACH PARTITION TO EXCEL
+# ============================================================
+
+def write_partition(partition_index, iterator):
+
+    rows = list(iterator)
+
+    if not rows:
+        return iter([])
+
+    # IMPORTANT:
+    # This list contains only ONE Spark partition,
+    # not the entire dataset.
+
+    filename = (
+        output_path
+        / f"KBO_MERGED_{partition_index + 1:03d}.xlsx"
+    )
+
+    workbook = xlsxwriter.Workbook(
+        str(filename),
+        {
+            "constant_memory": True
+        }
+    )
+
+    worksheet = workbook.add_worksheet("KBO")
+
+    headers = merged.columns
+
+    # --------------------------------------------------------
+    # Header
+    # --------------------------------------------------------
+
+    for col_index, header in enumerate(headers):
+
+        worksheet.write(
+            0,
+            col_index,
+            header
+        )
+
+    # --------------------------------------------------------
+    # Data
+    # --------------------------------------------------------
+
+    for row_index, row in enumerate(rows, start=1):
+
+        for col_index, value in enumerate(row):
+
+            if value is None:
+
+                worksheet.write(
+                    row_index,
+                    col_index,
+                    ""
+                )
+
+            else:
+
+                worksheet.write(
+                    row_index,
+                    col_index,
+                    str(value)
+                )
+
+    workbook.close()
+
+    print(
+        f"Created: {filename.name} "
+        f"({len(rows):,} rows)"
+    )
+
+    return iter([])
+
+
+# ============================================================
+# EXECUTE
+# ============================================================
+
+(
+    merged
+    .rdd
+    .mapPartitionsWithIndex(write_partition)
+    .count()
+)
+
+
+# ============================================================
+# 17. FINAL MESSAGE
+# ============================================================
+
+print("\n")
+print("=" * 70)
+print("DONE")
+print("=" * 70)
+
+print(
+    "Final unique KBO records:",
+    f"{final_count:,}"
+)
+
+print(
+    "Output folder:",
+    OUTPUT_FOLDER
+)
+
+print(
+    "\nEvery different value is preserved."
+)
+
+print(
+    "Duplicate values are removed."
+)
+
+print(
+    "GSM / TEL values are NOT discarded."
+)
+
+print(
+    "All tables are connected through KBO_KEY."
+)
+
+print(
+    "Excel files created successfully."
+)
