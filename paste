@@ -1,13 +1,162 @@
----------------------------------------------------------------------------
-ModuleNotFoundError                       Traceback (most recent call last)
-Cell In[1], line 18
-     14 from pyspark.sql import SparkSession
-     15 from pyspark.sql import functions as F
-     16 from pyspark.sql.types import StringType
-     17 
----> 18 import xlsxwriter
-     19 
-     20 
-     21 # ============================================================
 
-ModuleNotFoundError: No module named 'xlsxwriter'
+KBO PySpark Machine Setup Requirements
+====================================
+
+Use this checklist on EVERY Windows machine that will execute the KBO PySpark code.
+
+1. JAVA
+--------
+Install:
+- Java JDK 17 (Eclipse Temurin 17)
+
+Verify in CMD:
+    java -version
+    javac -version
+
+Expected:
+- Java 17.x.x
+
+
+2. PYTHON
+---------
+Install:
+- Python 3.11+ (Python 3.11 is recommended for this setup)
+
+Verify:
+    python --version
+
+
+3. PYTHON LIBRARIES
+-------------------
+Open CMD and run:
+
+    python -m pip install pyspark xlsxwriter jupyter
+
+Required packages:
+- pyspark
+- xlsxwriter
+- jupyter
+
+Verify:
+
+    python -c "import pyspark; print(pyspark.__version__)"
+    python -c "import xlsxwriter; print(xlsxwriter.__version__)"
+
+Working versions from our setup:
+- PySpark 4.2.0
+- XlsxWriter 3.2.9
+
+
+4. WINDOWS HADOOP FILES
+-----------------------
+The Windows machine also needs:
+
+    C:\hadoop\bin\winutils.exe
+    C:\hadoop\bin\hadoop.dll
+
+Verify:
+
+    C:\hadoop\bin\winutils.exe
+
+It should display the winutils usage/help.
+
+Set HADOOP_HOME:
+
+    setx HADOOP_HOME C:\hadoop
+
+Add Hadoop to PATH:
+
+    setx PATH "%PATH%;C:\hadoop\bin"
+
+IMPORTANT:
+After using setx, CLOSE CMD and open a NEW CMD window.
+
+Verify:
+
+    echo %HADOOP_HOME%
+
+Expected:
+
+    C:\hadoop
+
+
+5. SPARK TEST
+-------------
+After Java, PySpark, and Hadoop are installed, test Spark with:
+
+    python -c "from pyspark.sql import SparkSession; spark=SparkSession.builder.master('local[*]').appName('test').getOrCreate(); print('SPARK OK:', spark.version); spark.stop()"
+
+Expected:
+
+    SPARK OK: 4.2.0
+
+Some Spark WARNING messages are normal.
+
+
+6. JUPYTER
+----------
+Start Jupyter with:
+
+    jupyter notebook
+
+Then open the notebook and run the KBO Python/PySpark code there.
+
+
+7. KBO DATA
+-----------
+For the QUICK MASTER code, the input folder must contain:
+
+    enterprise.csv
+    denomination.csv
+    address.csv
+    contact.csv
+
+Example:
+
+    C:\Users\Lenovo\Desktop\KBO_DATA
+
+Set INPUT_FOLDER in the code to that folder.
+
+
+8. OUTPUT
+---------
+The code creates Excel files in OUTPUT_FOLDER.
+
+Example:
+
+    C:\Users\Lenovo\Desktop\KBO_QUICK_RESULT
+
+Make sure the disk has enough free space for the generated XLSX files
+and Spark temporary files.
+
+
+9. IMPORTANT
+------------
+Do NOT install pandas specifically for the KBO processing code.
+The current KBO code uses PySpark + XlsxWriter.
+
+Do NOT run the old giant full-join/repartition version if the disk is
+short on space. The current quick version avoids repartition() before
+Excel export.
+
+
+QUICK INSTALL COMMAND
+=====================
+After Java is installed, run:
+
+    python -m pip install pyspark xlsxwriter jupyter
+
+
+FINAL CHECKLIST
+===============
+[ ] Java JDK 17
+[ ] Python
+[ ] PySpark
+[ ] XlsxWriter
+[ ] Jupyter
+[ ] C:\hadoop\bin\winutils.exe
+[ ] C:\hadoop\bin\hadoop.dll
+[ ] HADOOP_HOME=C:\hadoop
+[ ] Spark test returns SPARK OK
+[ ] KBO CSV folder ready
+[ ] Enough free disk space
