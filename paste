@@ -1,31 +1,15 @@
 import pandas as pd
-from pathlib import Path
 
-# ==============================
-# FILE PATH
-# ==============================
 input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
-
-# Output file
 output_file = r"C:\Users\Sunlight\Desktop\your_file_deduplicated.xlsx"
 
-
-# ==============================
-# READ EXCEL
-# ==============================
+# Read Excel
 df = pd.read_excel(input_file)
 
-
-# ==============================
-# CLEAN COLUMN NAMES
-# ==============================
+# Clean column names
 df.columns = df.columns.astype(str).str.strip()
 
-
-# ==============================
-# REMOVE DUPLICATES
-# BASED ON NUMERO + LIBELLE
-# ==============================
+# Remove duplicates based on Numéro + Libellé
 before = len(df)
 
 df = df.drop_duplicates(
@@ -33,22 +17,18 @@ df = df.drop_duplicates(
     keep="first"
 )
 
-after = len(df)
+# Find date columns and remove the time part
+for col in df.columns:
+    if pd.api.types.is_datetime64_any_dtype(df[col]):
+        df[col] = df[col].dt.date
 
-
-# ==============================
-# SAVE
-# ==============================
+# Save
 df.to_excel(output_file, index=False)
 
-
-# ==============================
-# RESULTS
-# ==============================
 print("--------------------------------")
 print("DONE")
 print("--------------------------------")
-print(f"Rows before      : {before:,}")
-print(f"Rows after       : {after:,}")
-print(f"Duplicates removed: {before - after:,}")
+print(f"Rows before       : {before:,}")
+print(f"Rows after        : {len(df):,}")
+print(f"Duplicates removed: {before - len(df):,}")
 print(f"Output            : {output_file}")
