@@ -1,5 +1,4 @@
 import pandas as pd
-import re
 from pathlib import Path
 
 # ============================================================
@@ -7,62 +6,7 @@ from pathlib import Path
 # ============================================================
 
 input_file = Path(r"C:\Users\Sunlight\Desktop\input.xlsx")
-output_file = Path(r"C:\Users\Sunlight\Desktop\telephone_checked.xlsx")
-
-# ============================================================
-# BELGIAN PHONE CLASSIFICATION
-# ============================================================
-
-def classify_belgian_number(phone):
-
-    if pd.isna(phone):
-        return "UNKNOWN"
-
-    phone = str(phone).strip()
-
-    if not phone:
-        return "UNKNOWN"
-
-    # Remove Excel decimal artifact
-    if phone.endswith(".0"):
-        phone = phone[:-2]
-
-    # Keep only digits and +
-    phone = re.sub(r"[^\d+]", "", phone)
-
-    # Convert Belgian international formats to national format
-    if phone.startswith("+32"):
-        phone = "0" + phone[3:]
-
-    elif phone.startswith("0032"):
-        phone = "0" + phone[4:]
-
-    elif phone.startswith("32") and not phone.startswith("320"):
-        phone = "0" + phone[2:]
-
-    # --------------------------------------------------------
-    # Belgian GSM
-    # Normally starts with 04
-    # --------------------------------------------------------
-
-    if re.fullmatch(r"04\d{8}", phone):
-        return "GSM"
-
-    # --------------------------------------------------------
-    # Belgian fixed-line
-    # Geographic numbers generally start with 0
-    # and contain 9 digits in national format.
-    # --------------------------------------------------------
-
-    if re.fullmatch(r"0\d{8}", phone):
-        return "FIXE"
-
-    # --------------------------------------------------------
-    # Unknown / invalid format
-    # --------------------------------------------------------
-
-    return "UNKNOWN"
-
+output_file = Path(r"C:\Users\Sunlight\Desktop\output_telephone.xlsx")
 
 # ============================================================
 # READ FILE
@@ -70,25 +14,71 @@ def classify_belgian_number(phone):
 
 df = pd.read_excel(input_file, dtype=str)
 
-# Make sure TELE exists
-if "TELE" not in df.columns:
-    raise ValueError("The column 'TELE' was not found in the file.")
+# Keep the original data exactly as it is
+df = df.fillna("")
+
+# Phone columns
+phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
+
+# Make sure the columns exist
+for col in phone_columns:
+    if col not in df.columns:
+        df[col] = ""
 
 # ============================================================
-# ANALYZE TELE
+# CREATE ONE ROW PER PHONE
 # ============================================================
 
-df["TYPE_TELE"] = df["TELE"].apply(classify_belgian_number)
+rows = []
+
+for _, row in df.iterrows():
+
+    phones_found = False
+
+    for col in phone_columns:
+
+        phone = str(row[col]).strip()
+
+        if phone != "":
+            phones_found = True
+
+            new_row = row.copy()
+
+            # Put the phone in TELE
+            new_row["TELE"] = phone
+
+            rows.append(new_row)
+
+    # If the original row has NO phone at all,
+    # keep the row with TELE empty
+    if not phones_found:
+        new_row = row.copy()
+        new_row["TELE"] = ""
+        rows.append(new_row)
+
+# ============================================================
+# CREATE FINAL DATAFRAME
+# ============================================================
+
+result = pd.DataFrame(rows)
+
+# ============================================================
+# REMOVE ORIGINAL PHONE COLUMNS
+# ============================================================
+
+result = result.drop(columns=phone_columns)
+
+# Put TELE where you want it
+# Here it will be at the end.
+# If you want it somewhere specific, we can move it.
 
 # ============================================================
 # SAVE
 # ============================================================
 
-df.to_excel(output_file, index=False)
+result.to_excel(output_file, index=False)
 
 print("DONE")
-print()
-print("Results:")
-print(df["TYPE_TELE"].value_counts(dropna=False))
-print()
-print(f"Output: {output_file}")
+print(f"Original rows : {len(df):,}")
+print(f"Final rows    : {len(result):,}")
+print(f"Output        : {output_file}")
