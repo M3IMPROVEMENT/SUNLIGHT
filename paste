@@ -1,12 +1,18 @@
 import pandas as pd
 from pathlib import Path
+import math
 
 # ============================================================
 # CONFIG
 # ============================================================
 
 input_file = Path(r"C:\Users\Sunlight\Desktop\input.xlsx")
-output_file = Path(r"C:\Users\Sunlight\Desktop\output_telephone.xlsx")
+output_folder = Path(r"C:\Users\Sunlight\Desktop\telephone_parts")
+
+output_folder.mkdir(parents=True, exist_ok=True)
+
+# Excel maximum rows per sheet
+MAX_EXCEL_ROWS = 1_048_576
 
 # ============================================================
 # READ FILE
@@ -14,13 +20,13 @@ output_file = Path(r"C:\Users\Sunlight\Desktop\output_telephone.xlsx")
 
 df = pd.read_excel(input_file, dtype=str)
 
-# Keep the original data exactly as it is
+# Keep empty cells as empty strings
 df = df.fillna("")
 
 # Phone columns
 phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
 
-# Make sure the columns exist
+# Make sure all phone columns exist
 for col in phone_columns:
     if col not in df.columns:
         df[col] = ""
@@ -44,16 +50,16 @@ for _, row in df.iterrows():
 
             new_row = row.copy()
 
-            # Put the phone in TELE
+            # Put the phone into TELE
             new_row["TELE"] = phone
 
             rows.append(new_row)
 
-    # If the original row has NO phone at all,
-    # keep the row with TELE empty
+    # Keep rows that have no telephone
     if not phones_found:
         new_row = row.copy()
         new_row["TELE"] = ""
+
         rows.append(new_row)
 
 # ============================================================
@@ -62,23 +68,46 @@ for _, row in df.iterrows():
 
 result = pd.DataFrame(rows)
 
-# ============================================================
-# REMOVE ORIGINAL PHONE COLUMNS
-# ============================================================
-
+# Remove original phone columns
 result = result.drop(columns=phone_columns)
 
-# Put TELE where you want it
-# Here it will be at the end.
-# If you want it somewhere specific, we can move it.
-
 # ============================================================
-# SAVE
+# SPLIT INTO EXCEL PARTS
 # ============================================================
 
-result.to_excel(output_file, index=False)
+total_rows = len(result)
 
-print("DONE")
+# Excel can handle 1,048,576 rows, but the header
+# occupies one row, so use 1,048,575 data rows.
+MAX_DATA_ROWS = MAX_EXCEL_ROWS - 1
+
+number_of_parts = math.ceil(total_rows / MAX_DATA_ROWS)
+
+print("--------------------------------------------")
 print(f"Original rows : {len(df):,}")
-print(f"Final rows    : {len(result):,}")
-print(f"Output        : {output_file}")
+print(f"Final rows    : {total_rows:,}")
+print(f"Number parts  : {number_of_parts}")
+print("--------------------------------------------")
+
+for part_number in range(number_of_parts):
+
+    start = part_number * MAX_DATA_ROWS
+    end = start + MAX_DATA_ROWS
+
+    part = result.iloc[start:end]
+
+    output_file = output_folder / f"telephone_part{part_number + 1}.xlsx"
+
+    part.to_excel(
+        output_file,
+        index=False
+    )
+
+    print(
+        f"Part {part_number + 1}: "
+        f"{len(part):,} rows → {output_file.name}"
+    )
+
+print("--------------------------------------------")
+print("DONE")
+print(f"Files saved in: {output_folder}")
