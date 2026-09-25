@@ -1,34 +1,84 @@
 import pandas as pd
+from pathlib import Path
 
-input_file = r"C:\Users\Sunlight\Desktop\your_file.xlsx"
-output_file = r"C:\Users\Sunlight\Desktop\your_file_deduplicated.xlsx"
+# ============================================================
+# CONFIG
+# ============================================================
 
-# Read Excel
-df = pd.read_excel(input_file)
+input_file = Path(r"C:\Users\Sunlight\Desktop\input.xlsx")
+output_file = Path(r"C:\Users\Sunlight\Desktop\output_telephone.xlsx")
 
-# Clean column names
-df.columns = df.columns.astype(str).str.strip()
+# ============================================================
+# READ FILE
+# ============================================================
 
-# Remove duplicates based on Numéro + Libellé
-before = len(df)
+df = pd.read_excel(input_file, dtype=str)
 
-df = df.drop_duplicates(
-    subset=["Numéro", "Libellé"],
-    keep="first"
-)
+# Keep the original data exactly as it is
+df = df.fillna("")
 
-# Find date columns and remove the time part
-for col in df.columns:
-    if pd.api.types.is_datetime64_any_dtype(df[col]):
-        df[col] = df[col].dt.date
+# Phone columns
+phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
 
-# Save
-df.to_excel(output_file, index=False)
+# Make sure the columns exist
+for col in phone_columns:
+    if col not in df.columns:
+        df[col] = ""
 
-print("--------------------------------")
+# ============================================================
+# CREATE ONE ROW PER PHONE
+# ============================================================
+
+rows = []
+
+for _, row in df.iterrows():
+
+    phones_found = False
+
+    for col in phone_columns:
+
+        phone = str(row[col]).strip()
+
+        if phone != "":
+            phones_found = True
+
+            new_row = row.copy()
+
+            # Put the phone in TELE
+            new_row["TELE"] = phone
+
+            rows.append(new_row)
+
+    # If the original row has NO phone at all,
+    # keep the row with TELE empty
+    if not phones_found:
+        new_row = row.copy()
+        new_row["TELE"] = ""
+        rows.append(new_row)
+
+# ============================================================
+# CREATE FINAL DATAFRAME
+# ============================================================
+
+result = pd.DataFrame(rows)
+
+# ============================================================
+# REMOVE ORIGINAL PHONE COLUMNS
+# ============================================================
+
+result = result.drop(columns=phone_columns)
+
+# Put TELE where you want it
+# Here it will be at the end.
+# If you want it somewhere specific, we can move it.
+
+# ============================================================
+# SAVE
+# ============================================================
+
+result.to_excel(output_file, index=False)
+
 print("DONE")
-print("--------------------------------")
-print(f"Rows before       : {before:,}")
-print(f"Rows after        : {len(df):,}")
-print(f"Duplicates removed: {before - len(df):,}")
-print(f"Output            : {output_file}")
+print(f"Original rows : {len(df):,}")
+print(f"Final rows    : {len(result):,}")
+print(f"Output        : {output_file}")
