@@ -1,18 +1,68 @@
 import pandas as pd
+import re
 from pathlib import Path
-import math
 
 # ============================================================
 # CONFIG
 # ============================================================
 
 input_file = Path(r"C:\Users\Sunlight\Desktop\input.xlsx")
-output_folder = Path(r"C:\Users\Sunlight\Desktop\telephone_parts")
+output_file = Path(r"C:\Users\Sunlight\Desktop\telephone_checked.xlsx")
 
-output_folder.mkdir(parents=True, exist_ok=True)
+# ============================================================
+# BELGIAN PHONE CLASSIFICATION
+# ============================================================
 
-# Excel maximum rows per sheet
-MAX_EXCEL_ROWS = 1_048_576
+def classify_belgian_number(phone):
+
+    if pd.isna(phone):
+        return "UNKNOWN"
+
+    phone = str(phone).strip()
+
+    if not phone:
+        return "UNKNOWN"
+
+    # Remove Excel decimal artifact
+    if phone.endswith(".0"):
+        phone = phone[:-2]
+
+    # Keep only digits and +
+    phone = re.sub(r"[^\d+]", "", phone)
+
+    # Convert Belgian international formats to national format
+    if phone.startswith("+32"):
+        phone = "0" + phone[3:]
+
+    elif phone.startswith("0032"):
+        phone = "0" + phone[4:]
+
+    elif phone.startswith("32") and not phone.startswith("320"):
+        phone = "0" + phone[2:]
+
+    # --------------------------------------------------------
+    # Belgian GSM
+    # Normally starts with 04
+    # --------------------------------------------------------
+
+    if re.fullmatch(r"04\d{8}", phone):
+        return "GSM"
+
+    # --------------------------------------------------------
+    # Belgian fixed-line
+    # Geographic numbers generally start with 0
+    # and contain 9 digits in national format.
+    # --------------------------------------------------------
+
+    if re.fullmatch(r"0\d{8}", phone):
+        return "FIXE"
+
+    # --------------------------------------------------------
+    # Unknown / invalid format
+    # --------------------------------------------------------
+
+    return "UNKNOWN"
+
 
 # ============================================================
 # READ FILE
@@ -20,94 +70,25 @@ MAX_EXCEL_ROWS = 1_048_576
 
 df = pd.read_excel(input_file, dtype=str)
 
-# Keep empty cells as empty strings
-df = df.fillna("")
-
-# Phone columns
-phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
-
-# Make sure all phone columns exist
-for col in phone_columns:
-    if col not in df.columns:
-        df[col] = ""
+# Make sure TELE exists
+if "TELE" not in df.columns:
+    raise ValueError("The column 'TELE' was not found in the file.")
 
 # ============================================================
-# CREATE ONE ROW PER PHONE
+# ANALYZE TELE
 # ============================================================
 
-rows = []
-
-for _, row in df.iterrows():
-
-    phones_found = False
-
-    for col in phone_columns:
-
-        phone = str(row[col]).strip()
-
-        if phone != "":
-            phones_found = True
-
-            new_row = row.copy()
-
-            # Put the phone into TELE
-            new_row["TELE"] = phone
-
-            rows.append(new_row)
-
-    # Keep rows that have no telephone
-    if not phones_found:
-        new_row = row.copy()
-        new_row["TELE"] = ""
-
-        rows.append(new_row)
+df["TYPE_TELE"] = df["TELE"].apply(classify_belgian_number)
 
 # ============================================================
-# CREATE FINAL DATAFRAME
+# SAVE
 # ============================================================
 
-result = pd.DataFrame(rows)
+df.to_excel(output_file, index=False)
 
-# Remove original phone columns
-result = result.drop(columns=phone_columns)
-
-# ============================================================
-# SPLIT INTO EXCEL PARTS
-# ============================================================
-
-total_rows = len(result)
-
-# Excel can handle 1,048,576 rows, but the header
-# occupies one row, so use 1,048,575 data rows.
-MAX_DATA_ROWS = MAX_EXCEL_ROWS - 1
-
-number_of_parts = math.ceil(total_rows / MAX_DATA_ROWS)
-
-print("--------------------------------------------")
-print(f"Original rows : {len(df):,}")
-print(f"Final rows    : {total_rows:,}")
-print(f"Number parts  : {number_of_parts}")
-print("--------------------------------------------")
-
-for part_number in range(number_of_parts):
-
-    start = part_number * MAX_DATA_ROWS
-    end = start + MAX_DATA_ROWS
-
-    part = result.iloc[start:end]
-
-    output_file = output_folder / f"telephone_part{part_number + 1}.xlsx"
-
-    part.to_excel(
-        output_file,
-        index=False
-    )
-
-    print(
-        f"Part {part_number + 1}: "
-        f"{len(part):,} rows → {output_file.name}"
-    )
-
-print("--------------------------------------------")
 print("DONE")
-print(f"Files saved in: {output_folder}")
+print()
+print("Results:")
+print(df["TYPE_TELE"].value_counts(dropna=False))
+print()
+print(f"Output: {output_file}")
