@@ -180,3 +180,20 @@ df.to_excel(
 
 # ============================================================
 # RESULTS
+# ============================================================
+
+print("--------------------------------------------")
+print("DONE")
+print("--------------------------------------------")
+
+print(f"Original rows : {len(df):,}")
+print()
+
+print("Classification:")
+print(df["TYPE_TELE"].value_counts(dropna=False))
+
+print()
+print(f"Output file:")
+print(output_file)
+
+print("--------------------------------------------")
