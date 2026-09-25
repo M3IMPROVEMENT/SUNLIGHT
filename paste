@@ -1,4 +1,5 @@
 import pandas as pd
+import re
 from pathlib import Path
 
 # ============================================================
@@ -6,79 +7,176 @@ from pathlib import Path
 # ============================================================
 
 input_file = Path(r"C:\Users\Sunlight\Desktop\input.xlsx")
-output_file = Path(r"C:\Users\Sunlight\Desktop\output_telephone.xlsx")
+output_file = Path(r"C:\Users\Sunlight\Desktop\telephone_checked.xlsx")
+
+
+# ============================================================
+# BELGIAN TELEPHONE CLASSIFICATION
+# ============================================================
+
+def classify_belgian_number(phone):
+
+    if pd.isna(phone):
+        return "UNKNOWN"
+
+    phone = str(phone).strip()
+
+    if not phone:
+        return "UNKNOWN"
+
+    # Remove Excel decimal artifact
+    if phone.endswith(".0"):
+        phone = phone[:-2]
+
+    # Keep digits only
+    digits = re.sub(r"\D", "", phone)
+
+    if not digits:
+        return "UNKNOWN"
+
+    # ========================================================
+    # NORMALIZE BELGIAN INTERNATIONAL PREFIX
+    # ========================================================
+
+    # 0032XXXXXXXXX
+    if digits.startswith("0032"):
+        digits = digits[4:]
+
+    # 32XXXXXXXXX
+    elif digits.startswith("32"):
+        digits = digits[2:]
+
+    # ========================================================
+    # REMOVE NATIONAL 0
+    # ========================================================
+
+    # Example:
+    # 0475685784 -> 475685784
+    # 021234567  -> 21234567
+    if digits.startswith("0"):
+        digits = digits[1:]
+
+    # ========================================================
+    # GSM
+    #
+    # Belgian mobile ranges:
+    # 046xxxxxxx
+    # 047xxxxxxx
+    # 048xxxxxxx
+    # 049xxxxxxx
+    #
+    # After removing the 0:
+    # 46xxxxxxx
+    # 47xxxxxxx
+    # 48xxxxxxx
+    # 49xxxxxxx
+    #
+    # = exactly 9 digits
+    # ========================================================
+
+    if re.fullmatch(r"4[6789]\d{7}", digits):
+        return "GSM"
+
+    # ========================================================
+    # BELGIAN FIXE
+    #
+    # Geographic area codes.
+    #
+    # After removing the national 0, the number normally
+    # contains 8 digits.
+    # ========================================================
+
+    fixe_prefixes = (
+        "10",   # Brussels special/area numbering
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "19",
+        "2",    # Brussels
+        "3",    # Antwerp
+        "4",    # Liège
+        "50",
+        "51",
+        "52",
+        "53",
+        "54",
+        "55",
+        "56",
+        "57",
+        "58",
+        "59",
+        "60",
+        "61",
+        "63",
+        "64",
+        "65",
+        "67",
+        "68",
+        "69",
+        "71",
+        "80",
+        "81",
+        "82",
+        "83",
+        "84",
+        "85",
+        "86",
+        "87",
+        "89",
+        "9"     # Ghent
+    )
+
+    # Fixed number after removing 0 = 8 digits
+    if len(digits) == 8:
+
+        for prefix in fixe_prefixes:
+            if digits.startswith(prefix):
+                return "FIXE"
+
+    # ========================================================
+    # UNKNOWN
+    # ========================================================
+
+    return "UNKNOWN"
+
 
 # ============================================================
 # READ FILE
 # ============================================================
 
-df = pd.read_excel(input_file, dtype=str)
+df = pd.read_excel(
+    input_file,
+    dtype=str
+)
 
-# Keep the original data exactly as it is
-df = df.fillna("")
+# Check TELE column
+if "TELE" not in df.columns:
+    raise ValueError(
+        "ERROR: The column 'TELE' was not found in the file."
+    )
 
-# Phone columns
-phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
-
-# Make sure the columns exist
-for col in phone_columns:
-    if col not in df.columns:
-        df[col] = ""
-
-# ============================================================
-# CREATE ONE ROW PER PHONE
-# ============================================================
-
-rows = []
-
-for _, row in df.iterrows():
-
-    phones_found = False
-
-    for col in phone_columns:
-
-        phone = str(row[col]).strip()
-
-        if phone != "":
-            phones_found = True
-
-            new_row = row.copy()
-
-            # Put the phone in TELE
-            new_row["TELE"] = phone
-
-            rows.append(new_row)
-
-    # If the original row has NO phone at all,
-    # keep the row with TELE empty
-    if not phones_found:
-        new_row = row.copy()
-        new_row["TELE"] = ""
-        rows.append(new_row)
 
 # ============================================================
-# CREATE FINAL DATAFRAME
+# CLASSIFY TELE
 # ============================================================
 
-result = pd.DataFrame(rows)
+df["TYPE_TELE"] = df["TELE"].apply(
+    classify_belgian_number
+)
 
-# ============================================================
-# REMOVE ORIGINAL PHONE COLUMNS
-# ============================================================
-
-result = result.drop(columns=phone_columns)
-
-# Put TELE where you want it
-# Here it will be at the end.
-# If you want it somewhere specific, we can move it.
 
 # ============================================================
 # SAVE
 # ============================================================
 
-result.to_excel(output_file, index=False)
+df.to_excel(
+    output_file,
+    index=False
+)
 
-print("DONE")
-print(f"Original rows : {len(df):,}")
-print(f"Final rows    : {len(result):,}")
-print(f"Output        : {output_file}")
+
+# ============================================================
+# RESULTS
