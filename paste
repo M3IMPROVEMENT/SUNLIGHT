@@ -1,6 +1,5 @@
 import pandas as pd
 import re
-from pathlib import Path
 
 # ============================================================
 # SETTINGS
@@ -17,27 +16,13 @@ TELE_COLUMN = "TELE"
 # ============================================================
 
 def clean_tele(value):
-    """
-    Normalize Belgian telephone numbers.
-
-    Examples:
-        +32 476 12 34 56  -> 476123456
-        0032 476 12 34 56 -> 476123456
-        32 476 12 34 56   -> 476123456
-        0476 12 34 56     -> 476123456
-        0476123456        -> 476123456
-
-    Returns:
-        cleaned number as string
-    """
 
     if pd.isna(value):
         return ""
 
-    # Convert to string
     value = str(value).strip()
 
-    # Remove Excel decimal suffix, e.g. 476123456.0
+    # Remove Excel .0
     value = re.sub(r"\.0+$", "", value)
 
     # Keep digits only
@@ -46,26 +31,16 @@ def clean_tele(value):
     if not value:
         return ""
 
-    # --------------------------------------------------------
-    # Remove Belgian international prefixes
-    # --------------------------------------------------------
-
-    # 0032XXXXXXXXX
+    # Remove Belgian international prefix
     if value.startswith("0032"):
         value = value[4:]
 
-    # 32XXXXXXXXX
     elif value.startswith("32"):
         value = value[2:]
 
-    # Belgian national format:
-    # 04XXXXXXXX -> 4XXXXXXXX
+    # Remove Belgian national 0
     elif value.startswith("0"):
         value = value[1:]
-
-    # --------------------------------------------------------
-    # Final normalization
-    # --------------------------------------------------------
 
     return value
 
@@ -82,7 +57,7 @@ print(f"Rows before cleaning: {len(df):,}")
 
 
 # ============================================================
-# CHECK TELE COLUMN
+# CHECK COLUMN
 # ============================================================
 
 if TELE_COLUMN not in df.columns:
@@ -102,39 +77,33 @@ print("TELE column cleaned.")
 
 
 # ============================================================
-# REMOVE EMPTY TELE
+# DEDUPLICATE ONLY NON-EMPTY TELE
 # ============================================================
 
-before_empty = len(df)
+# Separate rows with TELE from rows without TELE
+has_tele = df[TELE_COLUMN].ne("")
+no_tele = df[TELE_COLUMN].eq("")
 
-df = df[df[TELE_COLUMN] != ""].copy()
+# Deduplicate ONLY rows that contain a TELE number
+with_tele = df.loc[has_tele].copy()
 
-removed_empty = before_empty - len(df)
+before_duplicates = len(with_tele)
 
-print(f"Empty TELE rows removed: {removed_empty:,}")
-
-
-# ============================================================
-# REMOVE DUPLICATES
-# ============================================================
-
-before_duplicates = len(df)
-
-df = df.drop_duplicates(
+with_tele = with_tele.drop_duplicates(
     subset=[TELE_COLUMN],
     keep="first"
-).copy()
+)
 
-duplicates_removed = before_duplicates - len(df)
+duplicates_removed = before_duplicates - len(with_tele)
 
-print(f"Duplicates removed: {duplicates_removed:,}")
+# Keep ALL empty TELE rows
+empty_tele_rows = df.loc[no_tele].copy()
 
-
-# ============================================================
-# RESET INDEX
-# ============================================================
-
-df.reset_index(drop=True, inplace=True)
+# Put everything back together
+df = pd.concat(
+    [with_tele, empty_tele_rows],
+    ignore_index=True
+)
 
 
 # ============================================================
@@ -156,10 +125,10 @@ print("\n" + "=" * 50)
 print("DONE")
 print("=" * 50)
 
-print(f"Rows before cleaning : {before_empty:,}")
-print(f"Empty TELE removed   : {removed_empty:,}")
-print(f"Duplicates removed   : {duplicates_removed:,}")
-print(f"Final rows           : {len(df):,}")
+print(f"Original rows       : {len(df) + duplicates_removed:,}")
+print(f"Duplicates removed  : {duplicates_removed:,}")
+print(f"Final rows          : {len(df):,}")
+print(f"Empty TELE rows kept: {len(empty_tele_rows):,}")
 
-print(f"\nOutput:")
+print("\nOutput:")
 print(OUTPUT_FILE)
