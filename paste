@@ -1,662 +1,937 @@
-{
- "cells": [
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "id": "d4ccc7ba-1e40-4121-8a49-8364c2396556",
-   "metadata": {},
-   "outputs": [
-    {
-     "name": "stdout",
-     "output_type": "stream",
-     "text": [
-      "All required files found.\n",
-      "\n",
-      "Reading ENTERPRISE...\n",
-      "  100,000 enterprise records processed\n",
-      "  200,000 enterprise records processed\n",
-      "  300,000 enterprise records processed\n",
-      "  400,000 enterprise records processed\n",
-      "  500,000 enterprise records processed\n",
-      "  600,000 enterprise records processed\n",
-      "  700,000 enterprise records processed\n",
-      "  800,000 enterprise records processed\n",
-      "  900,000 enterprise records processed\n",
-      "  1,000,000 enterprise records processed\n",
-      "  1,100,000 enterprise records processed\n",
-      "  1,200,000 enterprise records processed\n",
-      "  1,300,000 enterprise records processed\n",
-      "  1,400,000 enterprise records processed\n",
-      "  1,500,000 enterprise records processed\n",
-      "  1,600,000 enterprise records processed\n",
-      "  1,700,000 enterprise records processed\n",
-      "  1,800,000 enterprise records processed\n",
-      "  1,900,000 enterprise records processed\n",
-      "Enterprise done: 1,962,018\n",
-      "\n",
-      "Reading DENOMINATION...\n",
-      "  100,000 denomination records processed\n",
-      "  200,000 denomination records processed\n",
-      "  300,000 denomination records processed\n"
-     ]
-    }
-   ],
-   "source": [
-    "import csv\n",
-    "import sqlite3\n",
-    "import re\n",
-    "from pathlib import Path\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 1. FOLDER\n",
-    "# ============================================================\n",
-    "\n",
-    "FOLDER = Path(\n",
-    "    r\"C:\\Users\\Sunlight\\Desktop\\KBO\\DATA\"\n",
-    ")\n",
-    "\n",
-    "ENTERPRISE_FILE = FOLDER / \"enterprise.csv\"\n",
-    "DENOMINATION_FILE = FOLDER / \"denomination.csv\"\n",
-    "ADDRESS_FILE = FOLDER / \"address.csv\"\n",
-    "CONTACT_FILE = FOLDER / \"contact.csv\"\n",
-    "\n",
-    "DB_FILE = FOLDER / \"kbo_temp.db\"\n",
-    "OUTPUT_FILE = FOLDER / \"KBO_FINAL_COMPANIES.csv\"\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 2. HELPER\n",
-    "# ============================================================\n",
-    "\n",
-    "def normalize_kbo(value):\n",
-    "    \"\"\"\n",
-    "    0200.065.765 -> 0200065765\n",
-    "    0200065765   -> 0200065765\n",
-    "    \"\"\"\n",
-    "\n",
-    "    if not value:\n",
-    "        return \"\"\n",
-    "\n",
-    "    return re.sub(r\"\\D\", \"\", str(value))\n",
-    "\n",
-    "\n",
-    "def clean_text(value):\n",
-    "    if value is None:\n",
-    "        return \"\"\n",
-    "    return str(value).strip()\n",
-    "\n",
-    "\n",
-    "def read_csv_rows(filename):\n",
-    "    \"\"\"\n",
-    "    Read CSV progressively.\n",
-    "    Only one row at a time is kept in memory.\n",
-    "    \"\"\"\n",
-    "\n",
-    "    # utf-8-sig handles UTF-8 files with BOM\n",
-    "    with open(\n",
-    "        filename,\n",
-    "        \"r\",\n",
-    "        encoding=\"utf-8-sig\",\n",
-    "        newline=\"\",\n",
-    "        errors=\"replace\"\n",
-    "    ) as f:\n",
-    "\n",
-    "        reader = csv.DictReader(\n",
-    "            f,\n",
-    "            delimiter=\",\",\n",
-    "            quotechar='\"'\n",
-    "        )\n",
-    "\n",
-    "        for row in reader:\n",
-    "            yield row\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 3. CHECK FILES\n",
-    "# ============================================================\n",
-    "\n",
-    "for file in [\n",
-    "    ENTERPRISE_FILE,\n",
-    "    DENOMINATION_FILE,\n",
-    "    ADDRESS_FILE,\n",
-    "    CONTACT_FILE\n",
-    "]:\n",
-    "\n",
-    "    if not file.exists():\n",
-    "        raise FileNotFoundError(\n",
-    "            f\"File not found:\\n{file}\"\n",
-    "        )\n",
-    "\n",
-    "print(\"All required files found.\")\n",
-    "print()\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 4. CREATE SQLITE DATABASE\n",
-    "# ============================================================\n",
-    "\n",
-    "if DB_FILE.exists():\n",
-    "    DB_FILE.unlink()\n",
-    "\n",
-    "conn = sqlite3.connect(DB_FILE)\n",
-    "\n",
-    "cur = conn.cursor()\n",
-    "\n",
-    "cur.execute(\"\"\"\n",
-    "CREATE TABLE enterprise (\n",
-    "    kbo TEXT PRIMARY KEY\n",
-    ")\n",
-    "\"\"\")\n",
-    "\n",
-    "cur.execute(\"\"\"\n",
-    "CREATE TABLE denomination (\n",
-    "    kbo TEXT PRIMARY KEY,\n",
-    "    denomination TEXT\n",
-    ")\n",
-    "\"\"\")\n",
-    "\n",
-    "cur.execute(\"\"\"\n",
-    "CREATE TABLE address (\n",
-    "    kbo TEXT PRIMARY KEY,\n",
-    "    street TEXT,\n",
-    "    house_number TEXT,\n",
-    "    box TEXT,\n",
-    "    postal_code TEXT,\n",
-    "    municipality TEXT\n",
-    ")\n",
-    "\"\"\")\n",
-    "\n",
-    "cur.execute(\"\"\"\n",
-    "CREATE TABLE phone (\n",
-    "    kbo TEXT,\n",
-    "    phone TEXT\n",
-    ")\n",
-    "\"\"\")\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 5. ENTERPRISE\n",
-    "# ============================================================\n",
-    "\n",
-    "print(\"Reading ENTERPRISE...\")\n",
-    "\n",
-    "count = 0\n",
-    "\n",
-    "for row in read_csv_rows(ENTERPRISE_FILE):\n",
-    "\n",
-    "    kbo = normalize_kbo(\n",
-    "        row.get(\"EnterpriseNumber\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    if not kbo:\n",
-    "        continue\n",
-    "\n",
-    "    cur.execute(\n",
-    "        \"INSERT OR IGNORE INTO enterprise (kbo) VALUES (?)\",\n",
-    "        (kbo,)\n",
-    "    )\n",
-    "\n",
-    "    count += 1\n",
-    "\n",
-    "    if count % 100000 == 0:\n",
-    "        conn.commit()\n",
-    "        print(f\"  {count:,} enterprise records processed\")\n",
-    "\n",
-    "conn.commit()\n",
-    "\n",
-    "print(f\"Enterprise done: {count:,}\")\n",
-    "print()\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 6. DENOMINATION\n",
-    "# ============================================================\n",
-    "\n",
-    "print(\"Reading DENOMINATION...\")\n",
-    "\n",
-    "count = 0\n",
-    "\n",
-    "for row in read_csv_rows(DENOMINATION_FILE):\n",
-    "\n",
-    "    kbo = normalize_kbo(\n",
-    "        row.get(\"EntityNumber\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    name = clean_text(\n",
-    "        row.get(\"Denomination\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    if not kbo or not name:\n",
-    "        continue\n",
-    "\n",
-    "    type_name = clean_text(\n",
-    "        row.get(\"TypeOfDenomination\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    # Prefer Type 001\n",
-    "    if type_name == \"001\":\n",
-    "\n",
-    "        cur.execute(\"\"\"\n",
-    "            INSERT INTO denomination\n",
-    "            (kbo, denomination)\n",
-    "            VALUES (?, ?)\n",
-    "            ON CONFLICT(kbo)\n",
-    "            DO UPDATE SET denomination = excluded.denomination\n",
-    "        \"\"\", (kbo, name))\n",
-    "\n",
-    "    else:\n",
-    "\n",
-    "        # Only insert if company doesn't already have a name\n",
-    "        cur.execute(\"\"\"\n",
-    "            INSERT OR IGNORE INTO denomination\n",
-    "            (kbo, denomination)\n",
-    "            VALUES (?, ?)\n",
-    "        \"\"\", (kbo, name))\n",
-    "\n",
-    "    count += 1\n",
-    "\n",
-    "    if count % 100000 == 0:\n",
-    "        conn.commit()\n",
-    "        print(f\"  {count:,} denomination records processed\")\n",
-    "\n",
-    "conn.commit()\n",
-    "\n",
-    "print(f\"Denomination done: {count:,}\")\n",
-    "print()\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 7. ADDRESS\n",
-    "# ============================================================\n",
-    "\n",
-    "print(\"Reading ADDRESS...\")\n",
-    "\n",
-    "count = 0\n",
-    "\n",
-    "for row in read_csv_rows(ADDRESS_FILE):\n",
-    "\n",
-    "    kbo = normalize_kbo(\n",
-    "        row.get(\"EntityNumber\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    if not kbo:\n",
-    "        continue\n",
-    "\n",
-    "    # --------------------------------------------------------\n",
-    "    # The KBO file can contain different language columns.\n",
-    "    # We prefer French, then Dutch.\n",
-    "    # --------------------------------------------------------\n",
-    "\n",
-    "    street = clean_text(\n",
-    "        row.get(\"StreetFR\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    if not street:\n",
-    "        street = clean_text(\n",
-    "            row.get(\"StreetNL\", \"\")\n",
-    "        )\n",
-    "\n",
-    "    municipality = clean_text(\n",
-    "        row.get(\"MunicipalityFR\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    if not municipality:\n",
-    "        municipality = clean_text(\n",
-    "            row.get(\"MunicipalityNL\", \"\")\n",
-    "        )\n",
-    "\n",
-    "    postal_code = clean_text(\n",
-    "        row.get(\"PostCode\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    if not postal_code:\n",
-    "        postal_code = clean_text(\n",
-    "            row.get(\"PostalCode\", \"\")\n",
-    "        )\n",
-    "\n",
-    "    house_number = clean_text(\n",
-    "        row.get(\"HouseNumber\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    box = clean_text(\n",
-    "        row.get(\"Box\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    # Keep first address per company\n",
-    "    cur.execute(\"\"\"\n",
-    "        INSERT OR IGNORE INTO address\n",
-    "        (\n",
-    "            kbo,\n",
-    "            street,\n",
-    "            house_number,\n",
-    "            box,\n",
-    "            postal_code,\n",
-    "            municipality\n",
-    "        )\n",
-    "        VALUES (?, ?, ?, ?, ?, ?)\n",
-    "    \"\"\", (\n",
-    "        kbo,\n",
-    "        street,\n",
-    "        house_number,\n",
-    "        box,\n",
-    "        postal_code,\n",
-    "        municipality\n",
-    "    ))\n",
-    "\n",
-    "    count += 1\n",
-    "\n",
-    "    if count % 100000 == 0:\n",
-    "        conn.commit()\n",
-    "        print(f\"  {count:,} address records processed\")\n",
-    "\n",
-    "conn.commit()\n",
-    "\n",
-    "print(f\"Address done: {count:,}\")\n",
-    "print()\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 8. CONTACT / TELEPHONE\n",
-    "# ============================================================\n",
-    "\n",
-    "print(\"Reading CONTACT...\")\n",
-    "\n",
-    "count = 0\n",
-    "tel_count = 0\n",
-    "\n",
-    "for row in read_csv_rows(CONTACT_FILE):\n",
-    "\n",
-    "    contact_type = clean_text(\n",
-    "        row.get(\"ContactType\", \"\")\n",
-    "    ).upper()\n",
-    "\n",
-    "    # We ONLY want telephone numbers\n",
-    "    if contact_type != \"TEL\":\n",
-    "        continue\n",
-    "\n",
-    "    kbo = normalize_kbo(\n",
-    "        row.get(\"EntityNumber\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    phone = clean_text(\n",
-    "        row.get(\"Value\", \"\")\n",
-    "    )\n",
-    "\n",
-    "    if not kbo or not phone:\n",
-    "        continue\n",
-    "\n",
-    "    cur.execute(\"\"\"\n",
-    "        INSERT INTO phone\n",
-    "        (kbo, phone)\n",
-    "        VALUES (?, ?)\n",
-    "    \"\"\", (\n",
-    "        kbo,\n",
-    "        phone\n",
-    "    ))\n",
-    "\n",
-    "    tel_count += 1\n",
-    "\n",
-    "    if tel_count % 100000 == 0:\n",
-    "        conn.commit()\n",
-    "        print(\n",
-    "            f\"  {tel_count:,} telephone records processed\"\n",
-    "        )\n",
-    "\n",
-    "conn.commit()\n",
-    "\n",
-    "print(f\"Telephone records: {tel_count:,}\")\n",
-    "print()\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 9. INDEX PHONE TABLE\n",
-    "# ============================================================\n",
-    "\n",
-    "print(\"Creating indexes...\")\n",
-    "\n",
-    "cur.execute(\"\"\"\n",
-    "CREATE INDEX idx_phone_kbo\n",
-    "ON phone(kbo)\n",
-    "\"\"\")\n",
-    "\n",
-    "conn.commit()\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 10. GSM DETECTION\n",
-    "# ============================================================\n",
-    "\n",
-    "def is_gsm(phone):\n",
-    "\n",
-    "    if not phone:\n",
-    "        return False\n",
-    "\n",
-    "    # This is ONLY for classification.\n",
-    "    # The original phone value is preserved.\n",
-    "\n",
-    "    x = re.sub(r\"[^0-9+]\", \"\", phone)\n",
-    "\n",
-    "    # 0032 -> +32\n",
-    "    if x.startswith(\"0032\"):\n",
-    "        x = \"+\" + x[2:]\n",
-    "\n",
-    "    # International Belgian GSM\n",
-    "    # +3246...\n",
-    "    # +3247...\n",
-    "    # +3248...\n",
-    "    # +3249...\n",
-    "\n",
-    "    if x.startswith(\"+324\"):\n",
-    "\n",
-    "        if len(x) >= 5 and x[4] in \"6789\":\n",
-    "            return True\n",
-    "\n",
-    "    # Local Belgian GSM\n",
-    "    # 046...\n",
-    "    # 047...\n",
-    "    # 048...\n",
-    "    # 049...\n",
-    "\n",
-    "    if re.match(r\"^04[6-9]\", x):\n",
-    "        return True\n",
-    "\n",
-    "    return False\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 11. GENERATE FINAL CSV\n",
-    "# ============================================================\n",
-    "\n",
-    "print(\"Creating final CSV...\")\n",
-    "\n",
-    "with open(\n",
-    "    OUTPUT_FILE,\n",
-    "    \"w\",\n",
-    "    encoding=\"utf-8-sig\",\n",
-    "    newline=\"\"\n",
-    ") as f:\n",
-    "\n",
-    "    writer = csv.writer(f)\n",
-    "\n",
-    "    writer.writerow([\n",
-    "        \"STE\",\n",
-    "        \"TVA\",\n",
-    "        \"NOM\",\n",
-    "        \"ADRESSE\",\n",
-    "        \"NUMERO\",\n",
-    "        \"COMPLEMENT\",\n",
-    "        \"CP\",\n",
-    "        \"VILLE\",\n",
-    "        \"GSM\",\n",
-    "        \"TEL1\",\n",
-    "        \"TEL2\",\n",
-    "        \"TEL3\"\n",
-    "    ])\n",
-    "\n",
-    "    cur.execute(\"\"\"\n",
-    "        SELECT\n",
-    "            e.kbo,\n",
-    "            d.denomination,\n",
-    "            a.street,\n",
-    "            a.house_number,\n",
-    "            a.box,\n",
-    "            a.postal_code,\n",
-    "            a.municipality\n",
-    "        FROM enterprise e\n",
-    "        LEFT JOIN denomination d\n",
-    "            ON e.kbo = d.kbo\n",
-    "        LEFT JOIN address a\n",
-    "            ON e.kbo = a.kbo\n",
-    "        ORDER BY e.kbo\n",
-    "    \"\"\")\n",
-    "\n",
-    "    company_count = 0\n",
-    "\n",
-    "    for row in cur:\n",
-    "\n",
-    "        (\n",
-    "            kbo,\n",
-    "            name,\n",
-    "            street,\n",
-    "            house_number,\n",
-    "            box,\n",
-    "            postal_code,\n",
-    "            municipality\n",
-    "        ) = row\n",
-    "\n",
-    "        # ----------------------------------------------------\n",
-    "        # Get telephone numbers for this company\n",
-    "        # ----------------------------------------------------\n",
-    "\n",
-    "        phones = []\n",
-    "\n",
-    "        cur2 = conn.cursor()\n",
-    "\n",
-    "        cur2.execute(\"\"\"\n",
-    "            SELECT phone\n",
-    "            FROM phone\n",
-    "            WHERE kbo = ?\n",
-    "        \"\"\", (kbo,))\n",
-    "\n",
-    "        for phone_row in cur2:\n",
-    "\n",
-    "            phone = phone_row[0]\n",
-    "\n",
-    "            if phone and phone not in phones:\n",
-    "                phones.append(phone)\n",
-    "\n",
-    "        # ----------------------------------------------------\n",
-    "        # Separate GSM and landline\n",
-    "        # ----------------------------------------------------\n",
-    "\n",
-    "        gsm = \"\"\n",
-    "        landlines = []\n",
-    "\n",
-    "        for phone in phones:\n",
-    "\n",
-    "            if is_gsm(phone):\n",
-    "\n",
-    "                if not gsm:\n",
-    "                    gsm = phone\n",
-    "\n",
-    "            else:\n",
-    "\n",
-    "                if phone not in landlines:\n",
-    "                    landlines.append(phone)\n",
-    "\n",
-    "        tel1 = landlines[0] if len(landlines) > 0 else \"\"\n",
-    "        tel2 = landlines[1] if len(landlines) > 1 else \"\"\n",
-    "        tel3 = landlines[2] if len(landlines) > 2 else \"\"\n",
-    "\n",
-    "        # ----------------------------------------------------\n",
-    "        # TVA representation\n",
-    "        # ----------------------------------------------------\n",
-    "\n",
-    "        tva = \"BE\" + kbo if kbo else \"\"\n",
-    "\n",
-    "        # ----------------------------------------------------\n",
-    "        # Write row\n",
-    "        # ----------------------------------------------------\n",
-    "\n",
-    "        writer.writerow([\n",
-    "            kbo,\n",
-    "            tva,\n",
-    "            name or \"\",\n",
-    "            street or \"\",\n",
-    "            house_number or \"\",\n",
-    "            box or \"\",\n",
-    "            postal_code or \"\",\n",
-    "            municipality or \"\",\n",
-    "            gsm,\n",
-    "            tel1,\n",
-    "            tel2,\n",
-    "            tel3\n",
-    "        ])\n",
-    "\n",
-    "        company_count += 1\n",
-    "\n",
-    "        if company_count % 100000 == 0:\n",
-    "            print(\n",
-    "                f\"  {company_count:,} companies written\"\n",
-    "            )\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 12. CLOSE DATABASE\n",
-    "# ============================================================\n",
-    "\n",
-    "conn.close()\n",
-    "\n",
-    "\n",
-    "# ============================================================\n",
-    "# 13. RESULT\n",
-    "# ============================================================\n",
-    "\n",
-    "print()\n",
-    "print(\"=\" * 60)\n",
-    "print(\"DONE\")\n",
-    "print(\"=\" * 60)\n",
-    "\n",
-    "print(f\"Companies: {company_count:,}\")\n",
-    "\n",
-    "print()\n",
-    "print(\"Output file:\")\n",
-    "print(OUTPUT_FILE)\n",
-    "\n",
-    "print()\n",
-    "print(\"Temporary database:\")\n",
-    "print(DB_FILE)\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "id": "500e0b3b-1117-4a1e-bc22-433c6670a968",
-   "metadata": {},
-   "outputs": [],
-   "source": []
-  }
- ],
- "metadata": {
-  "kernelspec": {
-   "display_name": "Python 3 (ipykernel)",
-   "language": "python",
-   "name": "python3"
-  },
-  "language_info": {
-   "codemirror_mode": {
-    "name": "ipython",
-    "version": 3
-   },
-   "file_extension": ".py",
-   "mimetype": "text/x-python",
-   "name": "python",
-   "nbconvert_exporter": "python",
-   "pygments_lexer": "ipython3",
-   "version": "3.14.5"
-  }
- },
- "nbformat": 4,
- "nbformat_minor": 5
-}
+import csv
+import sqlite3
+import re
+from pathlib import Path
+import xlsxwriter
+
+
+# ============================================================
+# 1. FOLDER
+# ============================================================
+
+FOLDER = Path(
+    r"C:\Users\Sunlight\Desktop\KBO\DATA"
+)
+
+ENTERPRISE_FILE = FOLDER / "enterprise.csv"
+DENOMINATION_FILE = FOLDER / "denomination.csv"
+ADDRESS_FILE = FOLDER / "address.csv"
+CONTACT_FILE = FOLDER / "contact.csv"
+
+DB_FILE = FOLDER / "kbo_temp.db"
+
+# Excel output base name
+OUTPUT_BASE = FOLDER / "KBO_FINAL_COMPANIES"
+
+
+# ============================================================
+# 2. EXCEL LIMIT
+# ============================================================
+
+# Excel maximum rows = 1,048,576
+# We keep one row for the header.
+EXCEL_MAX_ROWS = 1_048_576
+MAX_DATA_ROWS = EXCEL_MAX_ROWS - 1
+
+
+# ============================================================
+# 3. HELPER FUNCTIONS
+# ============================================================
+
+def normalize_kbo(value):
+    """
+    0200.065.765 -> 0200065765
+    0200065765   -> 0200065765
+    """
+
+    if not value:
+        return ""
+
+    return re.sub(r"\D", "", str(value))
+
+
+def clean_text(value):
+
+    if value is None:
+        return ""
+
+    return str(value).strip()
+
+
+def read_csv_rows(filename):
+
+    with open(
+        filename,
+        "r",
+        encoding="utf-8-sig",
+        newline="",
+        errors="replace"
+    ) as f:
+
+        reader = csv.DictReader(
+            f,
+            delimiter=",",
+            quotechar='"'
+        )
+
+        for row in reader:
+            yield row
+
+
+# ============================================================
+# 4. CP EXTRACTION
+# ============================================================
+
+def extract_cp(*values):
+    """
+    Try to find a Belgian postal code.
+
+    Examples:
+        1000
+        2000
+        "Rue Example 12, 1000 Bruxelles"
+        "1000 Bruxelles"
+
+    Returns exactly 4 digits when found.
+    """
+
+    for value in values:
+
+        if not value:
+            continue
+
+        text = clean_text(value)
+
+        # Direct 4 digit CP
+        match = re.search(r"(?<!\d)(\d{4})(?!\d)", text)
+
+        if match:
+            return match.group(1)
+
+    return ""
+
+
+# ============================================================
+# 5. GSM DETECTION
+# ============================================================
+
+def is_gsm(phone):
+
+    if not phone:
+        return False
+
+    # Keep only numbers and +
+    x = re.sub(r"[^0-9+]", "", str(phone))
+
+    # 0032 -> +32
+    if x.startswith("0032"):
+        x = "+32" + x[4:]
+
+    # --------------------------------------------------------
+    # INTERNATIONAL BELGIAN GSM
+    #
+    # +3246...
+    # +3247...
+    # +3248...
+    # +3249...
+    # --------------------------------------------------------
+
+    if x.startswith("+324"):
+
+        if len(x) >= 5 and x[4] in "6789":
+            return True
+
+    # --------------------------------------------------------
+    # INTERNATIONAL WITHOUT +
+    #
+    # 3246...
+    # 3247...
+    # 3248...
+    # 3249...
+    # --------------------------------------------------------
+
+    if x.startswith("324"):
+
+        if len(x) >= 4 and x[3] in "6789":
+            return True
+
+    # --------------------------------------------------------
+    # LOCAL BELGIAN GSM
+    #
+    # 046...
+    # 047...
+    # 048...
+    # 049...
+    # --------------------------------------------------------
+
+    if re.match(r"^04[6-9]", x):
+        return True
+
+    return False
+
+
+# ============================================================
+# 6. CHECK FILES
+# ============================================================
+
+for file in [
+    ENTERPRISE_FILE,
+    DENOMINATION_FILE,
+    ADDRESS_FILE,
+    CONTACT_FILE
+]:
+
+    if not file.exists():
+
+        raise FileNotFoundError(
+            f"File not found:\n{file}"
+        )
+
+
+print("All required files found.")
+print()
+
+
+# ============================================================
+# 7. CREATE SQLITE DATABASE
+# ============================================================
+
+if DB_FILE.exists():
+    DB_FILE.unlink()
+
+conn = sqlite3.connect(DB_FILE)
+
+cur = conn.cursor()
+
+
+# ------------------------------------------------------------
+# ENTERPRISE
+# ------------------------------------------------------------
+
+cur.execute("""
+CREATE TABLE enterprise (
+    kbo TEXT PRIMARY KEY
+)
+""")
+
+
+# ------------------------------------------------------------
+# DENOMINATION
+# ------------------------------------------------------------
+
+cur.execute("""
+CREATE TABLE denomination (
+    kbo TEXT PRIMARY KEY,
+    denomination TEXT
+)
+""")
+
+
+# ------------------------------------------------------------
+# ADDRESS
+# ------------------------------------------------------------
+
+cur.execute("""
+CREATE TABLE address (
+    kbo TEXT PRIMARY KEY,
+    street TEXT,
+    house_number TEXT,
+    box TEXT,
+    postal_code TEXT,
+    municipality TEXT
+)
+""")
+
+
+# ------------------------------------------------------------
+# PHONE
+# ------------------------------------------------------------
+
+cur.execute("""
+CREATE TABLE phone (
+    kbo TEXT,
+    phone TEXT
+)
+""")
+
+
+# ============================================================
+# 8. ENTERPRISE
+# ============================================================
+
+print("Reading ENTERPRISE...")
+
+count = 0
+
+for row in read_csv_rows(ENTERPRISE_FILE):
+
+    kbo = normalize_kbo(
+        row.get("EnterpriseNumber", "")
+    )
+
+    if not kbo:
+        continue
+
+    cur.execute(
+        "INSERT OR IGNORE INTO enterprise (kbo) VALUES (?)",
+        (kbo,)
+    )
+
+    count += 1
+
+    if count % 100000 == 0:
+
+        conn.commit()
+
+        print(
+            f"  {count:,} enterprise records processed"
+        )
+
+
+conn.commit()
+
+print(f"Enterprise done: {count:,}")
+print()
+
+
+# ============================================================
+# 9. DENOMINATION
+# ============================================================
+
+print("Reading DENOMINATION...")
+
+count = 0
+
+for row in read_csv_rows(DENOMINATION_FILE):
+
+    kbo = normalize_kbo(
+        row.get("EntityNumber", "")
+    )
+
+    name = clean_text(
+        row.get("Denomination", "")
+    )
+
+    if not kbo or not name:
+        continue
+
+    type_name = clean_text(
+        row.get("TypeOfDenomination", "")
+    )
+
+    # Prefer Type 001
+    if type_name == "001":
+
+        cur.execute("""
+            INSERT INTO denomination
+            (kbo, denomination)
+            VALUES (?, ?)
+
+            ON CONFLICT(kbo)
+            DO UPDATE SET
+                denomination = excluded.denomination
+        """, (
+            kbo,
+            name
+        ))
+
+    else:
+
+        cur.execute("""
+            INSERT OR IGNORE INTO denomination
+            (kbo, denomination)
+            VALUES (?, ?)
+        """, (
+            kbo,
+            name
+        ))
+
+    count += 1
+
+    if count % 100000 == 0:
+
+        conn.commit()
+
+        print(
+            f"  {count:,} denomination records processed"
+        )
+
+
+conn.commit()
+
+print(f"Denomination done: {count:,}")
+print()
+
+
+# ============================================================
+# 10. ADDRESS
+# ============================================================
+
+print("Reading ADDRESS...")
+
+count = 0
+
+for row in read_csv_rows(ADDRESS_FILE):
+
+    kbo = normalize_kbo(
+        row.get("EntityNumber", "")
+    )
+
+    if not kbo:
+        continue
+
+
+    # --------------------------------------------------------
+    # STREET
+    # --------------------------------------------------------
+
+    street = clean_text(
+        row.get("StreetFR", "")
+    )
+
+    if not street:
+
+        street = clean_text(
+            row.get("StreetNL", "")
+        )
+
+
+    # --------------------------------------------------------
+    # MUNICIPALITY
+    # --------------------------------------------------------
+
+    municipality = clean_text(
+        row.get("MunicipalityFR", "")
+    )
+
+    if not municipality:
+
+        municipality = clean_text(
+            row.get("MunicipalityNL", "")
+        )
+
+
+    # --------------------------------------------------------
+    # POSTAL CODE
+    # --------------------------------------------------------
+
+    postal_code = clean_text(
+        row.get("PostCode", "")
+    )
+
+    if not postal_code:
+
+        postal_code = clean_text(
+            row.get("PostalCode", "")
+        )
+
+
+    # --------------------------------------------------------
+    # HOUSE NUMBER
+    # --------------------------------------------------------
+
+    house_number = clean_text(
+        row.get("HouseNumber", "")
+    )
+
+
+    # --------------------------------------------------------
+    # BOX
+    # --------------------------------------------------------
+
+    box = clean_text(
+        row.get("Box", "")
+    )
+
+
+    # --------------------------------------------------------
+    # CP EXTRACTION
+    #
+    # If the official CP field is empty,
+    # try to find a 4-digit CP inside the address.
+    # --------------------------------------------------------
+
+    postal_code = extract_cp(
+        postal_code,
+        street,
+        municipality
+    )
+
+
+    # --------------------------------------------------------
+    # KEEP FIRST ADDRESS
+    # --------------------------------------------------------
+
+    cur.execute("""
+        INSERT OR IGNORE INTO address
+        (
+            kbo,
+            street,
+            house_number,
+            box,
+            postal_code,
+            municipality
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        kbo,
+        street,
+        house_number,
+        box,
+        postal_code,
+        municipality
+    ))
+
+
+    count += 1
+
+
+    if count % 100000 == 0:
+
+        conn.commit()
+
+        print(
+            f"  {count:,} address records processed"
+        )
+
+
+conn.commit()
+
+print(f"Address done: {count:,}")
+print()
+
+
+# ============================================================
+# 11. CONTACT / TELEPHONE
+# ============================================================
+
+print("Reading CONTACT...")
+
+tel_count = 0
+
+for row in read_csv_rows(CONTACT_FILE):
+
+    contact_type = clean_text(
+        row.get("ContactType", "")
+    ).upper()
+
+
+    # ONLY telephone
+    if contact_type != "TEL":
+        continue
+
+
+    kbo = normalize_kbo(
+        row.get("EntityNumber", "")
+    )
+
+
+    phone = clean_text(
+        row.get("Value", "")
+    )
+
+
+    if not kbo or not phone:
+        continue
+
+
+    cur.execute("""
+        INSERT INTO phone
+        (kbo, phone)
+        VALUES (?, ?)
+    """, (
+        kbo,
+        phone
+    ))
+
+
+    tel_count += 1
+
+
+    if tel_count % 100000 == 0:
+
+        conn.commit()
+
+        print(
+            f"  {tel_count:,} telephone records processed"
+        )
+
+
+conn.commit()
+
+print(
+    f"Telephone records: {tel_count:,}"
+)
+
+print()
+
+
+# ============================================================
+# 12. INDEXES
+# ============================================================
+
+print("Creating indexes...")
+
+
+cur.execute("""
+CREATE INDEX idx_phone_kbo
+ON phone(kbo)
+""")
+
+
+cur.execute("""
+CREATE INDEX idx_address_kbo
+ON address(kbo)
+""")
+
+
+conn.commit()
+
+
+# ============================================================
+# 13. CREATE PHONE AGGREGATION
+# ============================================================
+
+print("Preparing telephone data...")
+
+
+# We create a dictionary:
+#
+# KBO -> [phone1, phone2, phone3...]
+
+phone_dict = {}
+
+cur.execute("""
+SELECT kbo, phone
+FROM phone
+ORDER BY kbo
+""")
+
+
+for kbo, phone in cur:
+
+    if not phone:
+        continue
+
+    if kbo not in phone_dict:
+
+        phone_dict[kbo] = []
+
+    if phone not in phone_dict[kbo]:
+
+        phone_dict[kbo].append(phone)
+
+
+print(
+    f"Companies with telephone data: "
+    f"{len(phone_dict):,}"
+)
+
+print()
+
+
+# ============================================================
+# 14. EXCEL WRITER FUNCTION
+# ============================================================
+
+headers = [
+    "STE",
+    "TVA",
+    "NOM",
+    "ADRESSE",
+    "NUMERO",
+    "COMPLEMENT",
+    "CP",
+    "VILLE",
+    "GSM",
+    "TEL1",
+    "TEL2",
+    "TEL3"
+]
+
+
+part_number = 0
+rows_in_current_file = 0
+total_companies = 0
+workbook = None
+worksheet = None
+
+
+def create_new_excel():
+
+    global part_number
+    global rows_in_current_file
+    global workbook
+    global worksheet
+
+    # Close previous workbook
+    if workbook is not None:
+
+        workbook.close()
+
+    part_number += 1
+
+    rows_in_current_file = 0
+
+    output_file = Path(
+        f"{OUTPUT_BASE}_PART{part_number}.xlsx"
+    )
+
+    print()
+    print(
+        f"Creating Excel file:"
+    )
+    print(output_file)
+
+    workbook = xlsxwriter.Workbook(
+        str(output_file)
+    )
+
+    worksheet = workbook.add_worksheet(
+        "Companies"
+    )
+
+    # Header format
+    header_format = workbook.add_format({
+        "bold": True
+    })
+
+    for col, header in enumerate(headers):
+
+        worksheet.write(
+            0,
+            col,
+            header,
+            header_format
+        )
+
+    return output_file
+
+
+# ============================================================
+# 15. GENERATE EXCEL
+# ============================================================
+
+print("Creating final Excel files...")
+
+create_new_excel()
+
+
+cur.execute("""
+SELECT
+    e.kbo,
+    d.denomination,
+    a.street,
+    a.house_number,
+    a.box,
+    a.postal_code,
+    a.municipality
+
+FROM enterprise e
+
+LEFT JOIN denomination d
+    ON e.kbo = d.kbo
+
+LEFT JOIN address a
+    ON e.kbo = a.kbo
+
+ORDER BY e.kbo
+""")
+
+
+for row in cur:
+
+    (
+        kbo,
+        name,
+        street,
+        house_number,
+        box,
+        postal_code,
+        municipality
+    ) = row
+
+
+    # --------------------------------------------------------
+    # CHECK EXCEL LIMIT
+    # --------------------------------------------------------
+
+    if rows_in_current_file >= MAX_DATA_ROWS:
+
+        create_new_excel()
+
+
+    # --------------------------------------------------------
+    # PHONES
+    # --------------------------------------------------------
+
+    phones = phone_dict.get(
+        kbo,
+        []
+    )
+
+
+    # --------------------------------------------------------
+    # SEPARATE GSM / LANDLINE
+    # --------------------------------------------------------
+
+    gsm = ""
+
+    landlines = []
+
+
+    for phone in phones:
+
+        if is_gsm(phone):
+
+            # First GSM only
+            if not gsm:
+
+                gsm = phone
+
+        else:
+
+            if phone not in landlines:
+
+                landlines.append(phone)
+
+
+    # --------------------------------------------------------
+    # TEL1 / TEL2 / TEL3
+    # --------------------------------------------------------
+
+    tel1 = (
+        landlines[0]
+        if len(landlines) > 0
+        else ""
+    )
+
+    tel2 = (
+        landlines[1]
+        if len(landlines) > 1
+        else ""
+    )
+
+    tel3 = (
+        landlines[2]
+        if len(landlines) > 2
+        else ""
+    )
+
+
+    # --------------------------------------------------------
+    # TVA
+    # --------------------------------------------------------
+
+    tva = (
+        "BE" + kbo
+        if kbo
+        else ""
+    )
+
+
+    # --------------------------------------------------------
+    # CP FINAL CHECK
+    # --------------------------------------------------------
+
+    cp = extract_cp(
+        postal_code,
+        street,
+        municipality
+    )
+
+
+    # --------------------------------------------------------
+    # DATA ROW
+    # --------------------------------------------------------
+
+    data = [
+        kbo,
+        tva,
+        name or "",
+        street or "",
+        house_number or "",
+        box or "",
+        cp,
+        municipality or "",
+        gsm,
+        tel1,
+        tel2,
+        tel3
+    ]
+
+
+    # --------------------------------------------------------
+    # WRITE TO EXCEL
+    # --------------------------------------------------------
+
+    excel_row = rows_in_current_file + 1
+
+    for col, value in enumerate(data):
+
+        worksheet.write(
+            excel_row,
+            col,
+            value
+        )
+
+
+    rows_in_current_file += 1
+    total_companies += 1
+
+
+    if total_companies % 100000 == 0:
+
+        print(
+            f"  {total_companies:,} companies written"
+        )
+
+
+# ============================================================
+# 16. CLOSE LAST EXCEL FILE
+# ============================================================
+
+if workbook is not None:
+
+    workbook.close()
+
+
+# ============================================================
+# 17. CLOSE DATABASE
+# ============================================================
+
+conn.close()
+
+
+# ============================================================
+# 18. RESULT
+# ============================================================
+
+print()
+print("=" * 60)
+print("DONE")
+print("=" * 60)
+
+print(
+    f"Total companies: "
+    f"{total_companies:,}"
+)
+
+print(
+    f"Excel files created: "
+    f"{part_number}"
+)
+
+print()
+
+for i in range(1, part_number + 1):
+
+    output_file = Path(
+        f"{OUTPUT_BASE}_PART{i}.xlsx"
+    )
+
+    print(output_file)
+
+print()
+print("Temporary database:")
+print(DB_FILE)
