@@ -1,6 +1,119 @@
-=SUBSTITUE(SUBSTITUE(SUBSTITUE(SUBSTITUE(SUBSTITUE(I2;" ";"");"+";"");".";"");"-";"");"/";"")
+import openpyxl
+import re
+from pathlib import Path
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+input_file = r"C:\Users\YourName\Desktop\input.xlsx"
+output_file = r"C:\Users\YourName\Desktop\TELE_CLEANED.xlsx"
+
+# ============================================================
+# CLEAN TELE
+# ============================================================
+
+def clean_tele(value):
+
+    # Keep empty cells exactly empty
+    if value is None:
+        return None
+
+    # Convert to string
+    value = str(value).strip()
+
+    # Keep empty strings empty
+    if value == "":
+        return ""
+
+    # Remove Excel decimal .0
+    if value.endswith(".0"):
+        value = value[:-2]
+
+    # Keep digits only
+    value = re.sub(r"\D", "", value)
+
+    if value == "":
+        return ""
+
+    # --------------------------------------------------------
+    # Remove Belgian international prefixes
+    # --------------------------------------------------------
+
+    # 0032XXXXXXXXX
+    if value.startswith("0032"):
+        value = value[4:]
+
+    # 32XXXXXXXXX
+    elif value.startswith("32"):
+        value = value[2:]
+
+    # --------------------------------------------------------
+    # Remove leading 0
+    # --------------------------------------------------------
+
+    if value.startswith("0"):
+        value = value[1:]
+
+    # Return cleaned number
+    return value
 
 
+# ============================================================
+# OPEN EXCEL
+# ============================================================
+
+print("Opening Excel...")
+
+wb = openpyxl.load_workbook(input_file)
+
+for ws in wb.worksheets:
+
+    # Find TELE column
+    tele_col = None
+
+    for cell in ws[1]:
+        if cell.value is not None:
+            header = str(cell.value).strip().upper()
+
+            if header == "TELE":
+                tele_col = cell.column
+                break
+
+    if tele_col is None:
+        print(f"TELE column not found in sheet: {ws.title}")
+        continue
+
+    print(f"Cleaning TELE in sheet: {ws.title}")
+
+    # --------------------------------------------------------
+    # Clean TELE WITHOUT removing duplicates
+    # --------------------------------------------------------
+
+    for row in range(2, ws.max_row + 1):
+
+        cell = ws.cell(row=row, column=tele_col)
+
+        # Keep empty rows/cells
+        if cell.value is None:
+            continue
+
+        cell.value = clean_tele(cell.value)
 
 
-=SI(GAUCHE(J2;4)="0032";"0"&STXT(J2;5;9);SI(GAUCHE(J2;2)="32";"0"&STXT(J2;3;9);SI(ET(NBCAR(J2)=9;GAUCHE(J2;1)="4");"0"&J2;J2)))
+# ============================================================
+# SAVE
+# ============================================================
+
+wb.save(output_file)
+
+print()
+print("======================================")
+print("CLEANING FINISHED")
+print("======================================")
+print(f"Output file: {output_file}")
+print()
+print("IMPORTANT:")
+print("- Duplicates were NOT removed")
+print("- Empty rows were NOT removed")
+print("- Only TELE was cleaned")
