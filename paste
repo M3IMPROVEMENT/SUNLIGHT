@@ -1,1 +1,1 @@
-=SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(A2;" ";"");"+";"");".";"");"-";"");"/";"")
+=SUBSTITUE(SUBSTITUE(SUBSTITUE(SUBSTITUE(SUBSTITUE(I2;" ";"");"+";"");".";"");"-";"");"/";"")
