@@ -1,1 +1,6 @@
 =SUBSTITUE(SUBSTITUE(SUBSTITUE(SUBSTITUE(SUBSTITUE(I2;" ";"");"+";"");".";"");"-";"");"/";"")
+
+
+
+
+=SI(GAUCHE(J2;4)="0032";"0"&STXT(J2;5;9);SI(GAUCHE(J2;2)="32";"0"&STXT(J2;3;9);SI(ET(NBCAR(J2)=9;GAUCHE(J2;1)="4");"0"&J2;J2)))
