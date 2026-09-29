@@ -1,6 +1,5 @@
 import openpyxl
 import re
-from collections import Counter
 
 # ============================================================
 # CONFIGURATION
@@ -13,13 +12,17 @@ TELE_COLUMN = "TELE"
 
 
 # ============================================================
-# BASIC FUNCTIONS
+# GET DIGITS ONLY
 # ============================================================
 
 def get_digits(value):
     """
-    Get digits only.
-    Used ONLY for analysis.
+    Converts a TELE value to digits only for analysis.
+
+    Examples:
+        +32 471 12 34 56 -> 32471123456
+        0471/12/34/56    -> 0471123456
+        0032471123456    -> 0032471123456
     """
 
     if value is None:
@@ -27,25 +30,18 @@ def get_digits(value):
 
     text = str(value).strip()
 
-    # Excel numeric value such as 471123456.0
+    # Remove Excel .0
     if text.endswith(".0"):
         text = text[:-2]
 
     return re.sub(r"\D", "", text)
 
 
+# ============================================================
+# CHECK ONE BELGIAN PHONE NUMBER
+# ============================================================
+
 def is_belgian_number(digits):
-    """
-    Valid Belgian number structures for our split logic.
-
-    National:
-        9 digits  -> 0 + 8 digits
-        10 digits -> 0 + 9 digits
-
-    International:
-        32 + 9 digits  = 11 digits
-        0032 + 9 digits = 13 digits
-    """
 
     if not digits:
         return False
@@ -58,7 +54,7 @@ def is_belgian_number(digits):
     if len(digits) == 11 and digits.startswith("32"):
         return True
 
-    # National Belgian
+    # Belgian national format
     if len(digits) == 9 and digits.startswith("0"):
         return True
 
@@ -68,30 +64,23 @@ def is_belgian_number(digits):
     return False
 
 
+# ============================================================
+# CLEAN ONE NUMBER
+# ============================================================
+
 def clean_number(digits):
-    """
-    Clean AFTER splitting.
-
-    Examples:
-
-    +32 471 12 34 56 -> 471123456
-    0032 471123456   -> 471123456
-    32 471123456     -> 471123456
-    0471123456       -> 471123456
-    """
 
     if not digits:
         return ""
 
-    # 0032XXXXXXXXX
+    # +32 / 0032
     if digits.startswith("0032"):
         digits = digits[4:]
 
-    # 32XXXXXXXXX
     elif digits.startswith("32"):
         digits = digits[2:]
 
-    # National leading zero
+    # Belgian national 0
     if digits.startswith("0"):
         digits = digits[1:]
 
@@ -99,28 +88,20 @@ def clean_number(digits):
 
 
 # ============================================================
-# FIND ALL POSSIBLE PHONE PARTITIONS
+# FIND ALL POSSIBLE SPLITS
 # ============================================================
 
 def find_partitions(digits):
-    """
-    Find every possible way of dividing a digit string into
-    valid Belgian phone numbers.
-
-    IMPORTANT:
-    We never say:
-        "every 9 digits = a phone number"
-
-    We test all allowed lengths instead.
-    """
 
     solutions = []
 
     def search(position, current):
 
+        # Stop excessive combinations
         if len(solutions) > 20:
             return
 
+        # Finished
         if position == len(digits):
 
             solutions.append(current.copy())
@@ -150,36 +131,23 @@ def find_partitions(digits):
 
 
 # ============================================================
-# SPLIT USING EXPLICIT SEPARATORS
+# CHECK EXPLICIT SEPARATORS
 # ============================================================
 
-def split_by_separator(text):
-    """
-    Try separators such as:
-        ;
-        |
-        comma
-        slash
-        whitespace
-
-    BUT we do not blindly split every slash or space.
-
-    We first remove formatting and then validate the resulting
-    complete numbers.
-    """
+def try_separator_split(text):
 
     # --------------------------------------------------------
-    # First: semicolon / pipe are strong separators
+    # SEMICOLON / PIPE
     # --------------------------------------------------------
 
-    strong_parts = re.split(r"[;|]", text)
+    parts = re.split(r"[;|]", text)
 
-    if len(strong_parts) > 1:
+    if len(parts) > 1:
 
-        all_numbers = []
+        numbers = []
         valid = True
 
-        for part in strong_parts:
+        for part in parts:
 
             d = get_digits(part)
 
@@ -190,93 +158,78 @@ def split_by_separator(text):
                 valid = False
                 break
 
-            all_numbers.append(d)
+            numbers.append(d)
 
-        if valid and len(all_numbers) >= 2:
-            return all_numbers
+        if valid and len(numbers) >= 2:
+            return numbers
 
     # --------------------------------------------------------
-    # Slash
-    #
-    # We try it, but only accept it if BOTH sides are valid.
+    # SLASH
     #
     # 0475/252328
-    # -> whole thing = 0475252328
-    # -> therefore NOT split
+    # is ONE number -> don't split
     #
     # 043822774/0478719289
-    # -> both sides valid
-    # -> split
+    # is TWO numbers -> split
     # --------------------------------------------------------
 
-    slash_parts = re.split(r"\s*/\s*", text)
+    parts = re.split(r"\s*/\s*", text)
 
-    if len(slash_parts) > 1:
+    if len(parts) > 1:
 
-        all_numbers = []
+        numbers = []
         valid = True
 
-        for part in slash_parts:
+        for part in parts:
 
             d = get_digits(part)
 
             if not d or not is_belgian_number(d):
+
                 valid = False
                 break
 
-            all_numbers.append(d)
+            numbers.append(d)
 
-        if valid and len(all_numbers) >= 2:
-            return all_numbers
+        if valid and len(numbers) >= 2:
+            return numbers
 
     # --------------------------------------------------------
-    # Comma
+    # COMMA
     # --------------------------------------------------------
 
-    comma_parts = re.split(r"\s*,\s*", text)
+    parts = re.split(r"\s*,\s*", text)
 
-    if len(comma_parts) > 1:
+    if len(parts) > 1:
 
-        all_numbers = []
+        numbers = []
         valid = True
 
-        for part in comma_parts:
+        for part in parts:
 
             d = get_digits(part)
 
             if not d or not is_belgian_number(d):
+
                 valid = False
                 break
 
-            all_numbers.append(d)
+            numbers.append(d)
 
-        if valid and len(all_numbers) >= 2:
-            return all_numbers
-
-    # --------------------------------------------------------
-    # Whitespace
-    #
-    # We cannot simply split every space because:
-    #
-    # 087 33 47 33
-    #
-    # is ONE number.
-    #
-    # So we remove spaces first and then test partitions.
-    # --------------------------------------------------------
-
-    digits = get_digits(text)
+        if valid and len(numbers) >= 2:
+            return numbers
 
     return None
 
 
 # ============================================================
-# ANALYZE ONE TELE CELL
+# ANALYZE TELE
 # ============================================================
 
 def analyze_tele(value):
 
     if value is None:
+
         return {
             "status": "EMPTY",
             "numbers": [],
@@ -286,6 +239,7 @@ def analyze_tele(value):
     text = str(value).strip()
 
     if not text:
+
         return {
             "status": "EMPTY",
             "numbers": [],
@@ -295,34 +249,29 @@ def analyze_tele(value):
     digits = get_digits(text)
 
     if not digits:
+
         return {
             "status": "AMBIGUOUS",
             "numbers": [],
-            "reason": "No valid digits"
+            "reason": "No digits found"
         }
 
     # --------------------------------------------------------
-    # 1. Check explicit separators first
+    # FIRST: explicit separators
     # --------------------------------------------------------
 
-    separated = split_by_separator(text)
+    separated = try_separator_split(text)
 
     if separated is not None:
 
         return {
             "status": "SPLIT",
             "numbers": separated,
-            "reason": "Clear separator between valid numbers"
+            "reason": "Clear separator"
         }
 
     # --------------------------------------------------------
-    # 2. Is the entire value ONE valid number?
-    #
-    # This must happen BEFORE trying to split.
-    #
-    # Example:
-    # 0032478719289 = ONE number
-    # 0475252328    = ONE number
+    # SECOND: check if the whole value is ONE number
     # --------------------------------------------------------
 
     if is_belgian_number(digits):
@@ -334,79 +283,72 @@ def analyze_tele(value):
         }
 
     # --------------------------------------------------------
-    # 3. Try concatenated numbers
-    #
-    # Example:
-    #
-    # 0438227740478719289
-    #
-    # 9 + 10 = 19 digits
+    # THIRD: try concatenated numbers
     # --------------------------------------------------------
 
     partitions = find_partitions(digits)
 
-    # Remove duplicate solutions
-    unique_partitions = []
-
+    # Remove duplicates
+    unique = []
     seen = set()
 
-    for p in partitions:
+    for partition in partitions:
 
-        key = tuple(p)
+        key = tuple(partition)
 
         if key not in seen:
 
             seen.add(key)
-            unique_partitions.append(p)
+            unique.append(partition)
 
     # --------------------------------------------------------
-    # Exactly ONE interpretation
+    # EXACTLY ONE POSSIBLE SPLIT
     # --------------------------------------------------------
 
-    if len(unique_partitions) == 1:
+    if len(unique) == 1:
 
-        solution = unique_partitions[0]
+        solution = unique[0]
 
         if len(solution) >= 2:
 
             return {
                 "status": "SPLIT",
                 "numbers": solution,
-                "reason": "Unique valid phone-number split"
+                "reason": "Unique valid split"
             }
 
     # --------------------------------------------------------
-    # Multiple possible interpretations
+    # MORE THAN ONE POSSIBLE SPLIT
     # --------------------------------------------------------
 
-    if len(unique_partitions) > 1:
+    if len(unique) > 1:
 
         examples = []
 
-        for p in unique_partitions[:5]:
+        for partition in unique[:5]:
 
             examples.append(
-                " + ".join(p)
+                " + ".join(partition)
             )
 
         return {
             "status": "AMBIGUOUS",
             "numbers": [],
             "reason":
-                "More than one possible split: "
+                "Several possible splits: "
                 + " || ".join(examples)
         }
 
     # --------------------------------------------------------
-    # No valid interpretation
+    # NOTHING RELIABLE
     # --------------------------------------------------------
 
     return {
         "status": "AMBIGUOUS",
         "numbers": [],
         "reason":
-            f"Could not safely identify number(s); "
-            f"{len(digits)} digits after formatting removal"
+            f"Could not safely identify number(s). "
+            f"Digits found: {len(digits)}"
     }
 
 
@@ -415,9 +357,9 @@ def analyze_tele(value):
 # ============================================================
 
 print()
-print("======================================================")
+print("=" * 60)
 print("TELE CLEAN + SPLIT")
-print("======================================================")
+print("=" * 60)
 print()
 
 print("Input :", INPUT_FILE)
@@ -434,25 +376,24 @@ output_wb = openpyxl.Workbook(
     write_only=True
 )
 
-# Statistics
 total_rows = 0
+output_rows = 0
 one_number = 0
 split_rows = 0
 ambiguous_rows = 0
 empty_rows = 0
-output_rows = 0
 
 
 # ============================================================
-# PROCESS SHEETS
+# PROCESS EACH SHEET
 # ============================================================
 
 for ws in input_wb.worksheets:
 
     print()
-    print("------------------------------------------------------")
+    print("-" * 60)
     print("SHEET:", ws.title)
-    print("------------------------------------------------------")
+    print("-" * 60)
 
     output_ws = output_wb.create_sheet(
         title=ws.title
@@ -470,7 +411,7 @@ for ws in input_wb.worksheets:
     ]
 
     # --------------------------------------------------------
-    # Find TELE column
+    # FIND TELE COLUMN
     # --------------------------------------------------------
 
     tele_index = None
@@ -503,11 +444,12 @@ for ws in input_wb.worksheets:
         tele_index + 1
     )
 
+    # Write header
     output_ws.append(header_values)
 
-    # --------------------------------------------------------
-    # DATA
-    # --------------------------------------------------------
+    # ========================================================
+    # PROCESS ROWS
+    # ========================================================
 
     for excel_row, row in enumerate(
         rows,
@@ -528,9 +470,9 @@ for ws in input_wb.worksheets:
 
         status = result["status"]
 
-        # ====================================================
+        # ----------------------------------------------------
         # EMPTY
-        # ====================================================
+        # ----------------------------------------------------
 
         if status == "EMPTY":
 
@@ -543,9 +485,9 @@ for ws in input_wb.worksheets:
             output_rows += 1
             empty_rows += 1
 
-        # ====================================================
+        # ----------------------------------------------------
         # ONE NUMBER
-        # ====================================================
+        # ----------------------------------------------------
 
         elif status == "ONE":
 
@@ -560,30 +502,39 @@ for ws in input_wb.worksheets:
             output_rows += 1
             one_number += 1
 
-        # ====================================================
+        # ----------------------------------------------------
         # SPLIT
-        # ====================================================
+        # ----------------------------------------------------
 
         elif status == "SPLIT":
 
             split_rows += 1
 
-            cleaned_numbers = [
-                clean_number(n)
-                for n in result["numbers"]
-            ]
+            cleaned_numbers = []
 
+            for number in result["numbers"]:
+
+                cleaned_numbers.append(
+                    clean_number(number)
+                )
+
+            # PRINT EXACT ROW + NUMBERS
+            print()
             print(
-                f"[SPLIT] {ws.title} | "
-                f"Excel row {excel_row} | "
-                f"Original: {original_tele}"
+                f"[SPLIT] Sheet={ws.title} | "
+                f"Excel row={excel_row}"
             )
 
             print(
-                "        Numbers:",
+                f"Original TELE: {original_tele}"
+            )
+
+            print(
+                "Numbers found:",
                 " + ".join(cleaned_numbers)
             )
 
+            # Create one row for each number
             for number in cleaned_numbers:
 
                 new_row = values.copy()
@@ -594,21 +545,18 @@ for ws in input_wb.worksheets:
 
                 output_rows += 1
 
-        # ====================================================
+        # ----------------------------------------------------
         # AMBIGUOUS
-        # ====================================================
+        # ----------------------------------------------------
 
         elif status == "AMBIGUOUS":
 
             ambiguous_rows += 1
 
-            # IMPORTANT:
-            # Keep the row, but clean the value as far as
-            # safely possible WITHOUT splitting it.
-            #
-            # This means you can manually inspect it later.
+            # Keep the row.
+            # Clean digits only, but DO NOT GUESS A SPLIT.
             cleaned = clean_number(
-                digits_only(original_tele)
+                get_digits(original_tele)
             )
 
             new_row = values.copy()
@@ -619,35 +567,34 @@ for ws in input_wb.worksheets:
 
             output_rows += 1
 
+            # PRINT MANUAL CHECK
             print()
             print(
-                f"[MANUAL CHECK] {ws.title} | "
-                f"Excel row {excel_row}"
+                f"[MANUAL CHECK] Sheet={ws.title} | "
+                f"Excel row={excel_row}"
             )
 
             print(
-                "    Original:",
-                original_tele
+                f"Original TELE: {original_tele}"
             )
 
             print(
-                "    Reason:",
-                result["reason"]
+                f"Reason: {result['reason']}"
             )
-
-            print()
 
         # ----------------------------------------------------
-        # Progress
+        # PROGRESS
         # ----------------------------------------------------
 
         if total_rows % 10000 == 0:
 
+            print()
             print(
-                f"Progress: {total_rows:,} rows | "
-                f"Output: {output_rows:,} | "
-                f"Split: {split_rows:,} | "
-                f"Manual: {ambiguous_rows:,}"
+                f"Progress: "
+                f"{total_rows:,} rows | "
+                f"Output {output_rows:,} | "
+                f"Split {split_rows:,} | "
+                f"Manual {ambiguous_rows:,}"
             )
 
 
@@ -656,7 +603,7 @@ for ws in input_wb.worksheets:
 # ============================================================
 
 print()
-print("Saving output...")
+print("Saving...")
 
 output_wb.save(
     OUTPUT_FILE
@@ -670,22 +617,23 @@ input_wb.close()
 # ============================================================
 
 print()
-print()
-print("======================================================")
+print("=" * 60)
 print("FINISHED")
-print("======================================================")
+print("=" * 60)
 print()
+
 print(f"Original rows : {total_rows:,}")
 print(f"Output rows   : {output_rows:,}")
 print(f"One number    : {one_number:,}")
-print(f"Rows split    : {split_rows:,}")
+print(f"Split rows    : {split_rows:,}")
 print(f"Manual check  : {ambiguous_rows:,}")
 print(f"Empty TELE    : {empty_rows:,}")
+
 print()
-print("Duplicates were NOT removed.")
-print("Only ONE output Excel was created.")
+print("Duplicates: NOT removed")
+print("Original file: NOT modified")
 print()
-print("Output:")
+print("Output file:")
 print(OUTPUT_FILE)
 print()
-print("======================================================")
+print("=" * 60)
