@@ -1,1 +1,454 @@
-=SI(OU(ESTNUM(CHERCHE(" ";I2));ESTNUM(CHERCHE("/";I2));ESTNUM(CHERCHE(";";I2));ESTNUM(CHERCHE(",";I2));ESTNUM(CHERCHE("|";I2)));"PLUSIEURS NUMÉROS";"1 NUMÉRO")
+import openpyxl
+import re
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+input_file = r"C:\Users\YourName\Desktop\input.xlsx"
+output_file = r"C:\Users\YourName\Desktop\TELE_CLEAN_SPLIT.xlsx"
+
+TELE_COLUMN_NAME = "TELE"
+
+
+# ============================================================
+# GET DIGITS
+# ============================================================
+
+def digits_only(value):
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+
+    if text.endswith(".0"):
+        text = text[:-2]
+
+    return re.sub(r"\D", "", text)
+
+
+# ============================================================
+# IS A POSSIBLE BELGIAN PHONE?
+# ============================================================
+
+def is_valid_phone_digits(d):
+    """
+    We use lengths/prefixes only to decide where a number ends.
+
+    National:
+        0 + 8 digits = 9 digits
+        0 + 9 digits = 10 digits
+
+    32:
+        32 + 9 digits = 11 digits
+
+    0032:
+        0032 + 9 digits = 13 digits
+    """
+
+    if not d:
+        return False
+
+    # 0032XXXXXXXXX
+    if len(d) == 13 and d.startswith("0032"):
+        return True
+
+    # 32XXXXXXXXX
+    if len(d) == 11 and d.startswith("32"):
+        return True
+
+    # Belgian national format
+    if len(d) in (9, 10) and d.startswith("0"):
+        return True
+
+    return False
+
+
+# ============================================================
+# FIND POSSIBLE SPLIT
+# ============================================================
+
+def split_concatenated_digits(digits):
+    """
+    Try to split a string containing several phone numbers.
+
+    Example:
+        0438227740478719289
+
+    -> 043822774
+       0478719289
+
+    IMPORTANT:
+    We never split arbitrarily.
+    """
+
+    if is_valid_phone_digits(digits):
+        return [digits]
+
+    n = len(digits)
+
+    # Dynamic programming:
+    # find a complete partition into valid Belgian numbers.
+    solutions = []
+
+    def search(position, current):
+
+        if len(solutions) > 1:
+            return
+
+        if position == n:
+            solutions.append(current.copy())
+            return
+
+        # Possible lengths
+        for length in (9, 10, 11, 13):
+
+            end = position + length
+
+            if end > n:
+                continue
+
+            part = digits[position:end]
+
+            if is_valid_phone_digits(part):
+
+                current.append(part)
+
+                search(end, current)
+
+                current.pop()
+
+    search(0, [])
+
+    # Only accept if the split is unambiguous
+    if len(solutions) == 1:
+        return solutions[0]
+
+    return None
+
+
+# ============================================================
+# SPLIT TELE CELL
+# ============================================================
+
+def split_tele(value):
+
+    if value is None:
+        return [""]
+
+    original = str(value).strip()
+
+    if original == "":
+        return [""]
+
+    # --------------------------------------------------------
+    # Remove Excel .0
+    # --------------------------------------------------------
+
+    if original.endswith(".0"):
+        original = original[:-2]
+
+    # --------------------------------------------------------
+    # First try to detect multiple numbers using clear
+    # separators: ; | comma
+    # --------------------------------------------------------
+
+    pieces = re.split(r"[;|]+", original)
+
+    all_numbers = []
+
+    for piece in pieces:
+
+        piece = piece.strip()
+
+        if not piece:
+            continue
+
+        # ----------------------------------------------------
+        # Convert everything except digits to separators.
+        #
+        # This means:
+        #
+        # 087 33 47 33
+        # 0475/252328
+        #
+        # are initially treated as one digit sequence.
+        # ----------------------------------------------------
+
+        digits = digits_only(piece)
+
+        if not digits:
+            continue
+
+        # ----------------------------------------------------
+        # Try to recognize one or multiple numbers.
+        # ----------------------------------------------------
+
+        result = split_concatenated_digits(digits)
+
+        if result is not None:
+
+            all_numbers.extend(result)
+
+            continue
+
+        # ----------------------------------------------------
+        # If the whole thing cannot be safely partitioned,
+        # look for "/" as a possible separator.
+        #
+        # Example:
+        # 0475/252328 / 071/967571
+        # ----------------------------------------------------
+
+        slash_parts = re.split(r"\s*/\s*", piece)
+
+        if len(slash_parts) > 1:
+
+            slash_results = []
+            success = True
+
+            for part in slash_parts:
+
+                d = digits_only(part)
+
+                if not d:
+                    continue
+
+                result = split_concatenated_digits(d)
+
+                if result is None:
+                    success = False
+                    break
+
+                slash_results.extend(result)
+
+            if success and slash_results:
+
+                all_numbers.extend(slash_results)
+
+            else:
+
+                # Safety: don't guess
+                all_numbers.append(digits)
+
+        else:
+
+            # ------------------------------------------------
+            # Try whitespace-separated numbers
+            # ------------------------------------------------
+
+            space_parts = re.split(r"\s+", piece)
+
+            if len(space_parts) > 1:
+
+                space_results = []
+                success = True
+
+                for part in space_parts:
+
+                    d = digits_only(part)
+
+                    if not d:
+                        continue
+
+                    result = split_concatenated_digits(d)
+
+                    if result is None:
+                        success = False
+                        break
+
+                    space_results.extend(result)
+
+                if success and space_results:
+
+                    all_numbers.extend(space_results)
+
+                else:
+
+                    # Safety: don't guess
+                    all_numbers.append(digits)
+
+            else:
+
+                # Could not split safely
+                all_numbers.append(digits)
+
+    if not all_numbers:
+        return [""]
+
+    return all_numbers
+
+
+# ============================================================
+# CLEAN BELGIAN PREFIX
+# ============================================================
+
+def clean_phone(number):
+
+    d = digits_only(number)
+
+    if not d:
+        return ""
+
+    # 0032XXXXXXXXX
+    if d.startswith("0032"):
+        d = d[4:]
+
+    # 32XXXXXXXXX
+    elif d.startswith("32"):
+        d = d[2:]
+
+    # Belgian national leading 0
+    if d.startswith("0"):
+        d = d[1:]
+
+    return d
+
+
+# ============================================================
+# OPEN EXCEL
+# ============================================================
+
+print("Opening Excel...")
+print(input_file)
+
+wb_in = openpyxl.load_workbook(
+    input_file,
+    read_only=True,
+    data_only=False
+)
+
+wb_out = openpyxl.Workbook(write_only=True)
+
+total_original_rows = 0
+total_output_rows = 0
+total_split_rows = 0
+
+
+# ============================================================
+# PROCESS SHEETS
+# ============================================================
+
+for ws_in in wb_in.worksheets:
+
+    print()
+    print("Processing:", ws_in.title)
+
+    ws_out = wb_out.create_sheet(title=ws_in.title)
+
+    rows = ws_in.iter_rows()
+
+    try:
+        header = next(rows)
+    except StopIteration:
+        continue
+
+    header_values = [cell.value for cell in header]
+
+    # Find TELE column
+    tele_index = None
+
+    for i, value in enumerate(header_values):
+
+        if value is not None:
+
+            if str(value).strip().upper() == TELE_COLUMN_NAME:
+
+                tele_index = i
+                break
+
+    ws_out.append(header_values)
+
+    if tele_index is None:
+
+        print("WARNING: TELE column not found.")
+
+        for row in rows:
+            ws_out.append([cell.value for cell in row])
+
+        continue
+
+    # ========================================================
+    # ROWS
+    # ========================================================
+
+    for row in rows:
+
+        total_original_rows += 1
+
+        values = [cell.value for cell in row]
+
+        tele_value = values[tele_index]
+
+        phones = split_tele(tele_value)
+
+        # ----------------------------------------------------
+        # One number / empty
+        # ----------------------------------------------------
+
+        if len(phones) == 1:
+
+            new_row = values.copy()
+
+            new_row[tele_index] = clean_phone(phones[0])
+
+            ws_out.append(new_row)
+
+            total_output_rows += 1
+
+        # ----------------------------------------------------
+        # Multiple numbers
+        # ----------------------------------------------------
+
+        else:
+
+            total_split_rows += 1
+
+            for phone in phones:
+
+                new_row = values.copy()
+
+                new_row[tele_index] = clean_phone(phone)
+
+                ws_out.append(new_row)
+
+                total_output_rows += 1
+
+        # Progress
+        if total_original_rows % 10000 == 0:
+
+            print(
+                f"Processed: {total_original_rows:,} | "
+                f"Output: {total_output_rows:,} | "
+                f"Split rows: {total_split_rows:,}"
+            )
+
+
+# ============================================================
+# SAVE
+# ============================================================
+
+print()
+print("Saving...")
+
+wb_out.save(output_file)
+
+wb_in.close()
+
+print()
+print("==============================================")
+print("FINISHED")
+print("==============================================")
+print(f"Original rows : {total_original_rows:,}")
+print(f"Output rows   : {total_output_rows:,}")
+print(f"Rows split    : {total_split_rows:,}")
+print(f"Extra rows    : {total_output_rows - total_original_rows:,}")
+print()
+print("TELE cleaned : YES")
+print("TELE split   : YES")
+print("Duplicates   : NOT removed")
+print("Empty rows   : KEPT")
+print()
+print("Output:")
+print(output_file)
+print("==============================================")
