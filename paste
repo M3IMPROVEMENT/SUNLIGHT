@@ -1,215 +1,68 @@
-import pandas as pd
 import re
+import sys
+import pandas as pd
 
-# ============================================================
-# SETTINGS
-# ============================================================
+# ====== SETTINGS ======
+INPUT_FILE = "data.xlsx"          # your file (.xlsx or .csv)
+OUTPUT_FILE = "data_split.xlsx"   # result file
+PHONE_COLUMN = "tele"             # name of the phone column
+# ======================
 
-INPUT_FILE = r"C:\Users\YourName\Desktop\input.xlsx"
-OUTPUT_FILE = r"C:\Users\YourName\Desktop\TELE_split.xlsx"
-
-TELE_COLUMN = "TELE"
+# Belgian numbers: GSM = 10 digits (04xx...), landline = 9 digits (02, 03, 09, ...)
+LENGTHS = (10, 9)
 
 
-# ============================================================
-# FIND BELGIAN PHONE NUMBERS
-# ============================================================
+def segment(digits):
+    """Cut a long digit string into pieces of 10 or 9 digits, each starting with 0."""
+    if digits == "":
+        return []
+    for n in LENGTHS:
+        if len(digits) >= n and digits[0] == "0":
+            rest = segment(digits[n:])
+            if rest is not None:
+                return [digits[:n]] + rest
+    return None  # impossible to cut
 
-def find_phone_numbers(value):
 
+def split_cell(value):
     if pd.isna(value):
-        return [""]
-
+        return [value]                      # keep the empty row as it is
     text = str(value).strip()
+    text = re.sub(r"\.0$", "", text)        # 475123456.0 -> 475123456
+    text = text.replace("(0)", "")          # +32 (0)475... -> +32 475...
+    text = re.sub(r"\+32|0032", "0", text)  # international -> national
+    digits = re.sub(r"\D", "", text)        # keep digits only
 
-    if not text:
-        return [""]
+    if len(digits) <= 10:
+        return [digits]                     # normal number, nothing to split
 
-    # --------------------------------------------------------
-    # Belgian GSM / telephone patterns
-    #
-    # We allow spaces, dots, hyphens and parentheses
-    # INSIDE the number.
-    #
-    # Examples:
-    # +32 476 12 34 56
-    # 0032 476 12 34 56
-    # 32 476 12 34 56
-    # 0476 12 34 56
-    # 0476123456
-    # --------------------------------------------------------
-
-    phone_pattern = re.compile(
-        r"""
-        (?<!\d)
-
-        (?:
-            # International format
-            (?:\+|00)?32
-            [\s.\-()]*
-            \d
-            (?:[\s.\-()]*\d){8}
-
-            |
-
-            # Belgian national format
-            0
-            [\s.\-()]*
-            \d
-            (?:[\s.\-()]*\d){8}
-        )
-
-        (?!\d)
-        """,
-        re.VERBOSE
-    )
-
-    matches = list(phone_pattern.finditer(text))
-
-    # --------------------------------------------------------
-    # No multiple numbers detected
-    # Keep original value EXACTLY.
-    # --------------------------------------------------------
-
-    if len(matches) == 0:
-        return [text]
-
-    # --------------------------------------------------------
-    # Extract matches
-    # --------------------------------------------------------
-
-    phones = []
-
-    for match in matches:
-
-        phone = match.group(0).strip()
-
-        if phone and phone not in phones:
-            phones.append(phone)
-
-    # --------------------------------------------------------
-    # IMPORTANT:
-    #
-    # If only ONE number was detected, keep the ORIGINAL CELL.
-    # We don't clean or modify it.
-    # --------------------------------------------------------
-
-    if len(phones) == 1:
-        return [text]
-
-    # --------------------------------------------------------
-    # Multiple numbers detected.
-    #
-    # Return each number as its own row.
-    # --------------------------------------------------------
-
-    return phones
+    parts = segment(digits)
+    return parts if parts else [digits]     # if it can't be cut, keep it unchanged
 
 
-# ============================================================
-# READ EXCEL
-# ============================================================
+def main():
+    inp = sys.argv[1] if len(sys.argv) > 1 else INPUT_FILE
+    out = sys.argv[2] if len(sys.argv) > 2 else OUTPUT_FILE
 
-print("Reading Excel file...")
-
-df = pd.read_excel(
-    INPUT_FILE,
-    dtype={TELE_COLUMN: str}
-)
-
-print(f"Original rows: {len(df):,}")
-
-
-# ============================================================
-# CHECK COLUMN
-# ============================================================
-
-if TELE_COLUMN not in df.columns:
-    raise ValueError(
-        f"Column '{TELE_COLUMN}' was not found."
-    )
-
-
-# ============================================================
-# SPLIT ROWS
-# ============================================================
-
-new_rows = []
-
-multiple_phone_rows = 0
-total_new_phone_rows = 0
-
-for _, row in df.iterrows():
-
-    phones = find_phone_numbers(row[TELE_COLUMN])
-
-    # --------------------------------------------------------
-    # Multiple phones found
-    # --------------------------------------------------------
-
-    if len(phones) > 1:
-
-        multiple_phone_rows += 1
-
-        for phone in phones:
-
-            new_row = row.copy()
-
-            # ONLY change TELE
-            new_row[TELE_COLUMN] = phone
-
-            new_rows.append(new_row)
-
-            total_new_phone_rows += 1
-
-    # --------------------------------------------------------
-    # One or zero phone
-    # Keep original row unchanged
-    # --------------------------------------------------------
-
+    if inp.lower().endswith(".csv"):
+        df = pd.read_csv(inp, dtype=str)
     else:
+        df = pd.read_excel(inp, dtype=str)
 
-        new_rows.append(row.copy())
+    col = next((c for c in df.columns if str(c).strip().lower() == PHONE_COLUMN.lower()), None)
+    if col is None:
+        raise SystemExit(f"Column '{PHONE_COLUMN}' not found. Columns: {list(df.columns)}")
 
+    df[col] = df[col].apply(split_cell)
+    df = df.explode(col, ignore_index=True)   # other columns are repeated
 
-# ============================================================
-# CREATE RESULT
-# ============================================================
+    if out.lower().endswith(".csv"):
+        df.to_csv(out, index=False, encoding="utf-8-sig")
+    else:
+        df.to_excel(out, index=False)
 
-result = pd.DataFrame(
-    new_rows,
-    columns=df.columns
-)
-
-
-# ============================================================
-# SAVE
-# ============================================================
-
-result.to_excel(
-    OUTPUT_FILE,
-    index=False,
-    engine="openpyxl"
-)
+    print(f"Done: {len(df)} rows saved in {out}")
 
 
-# ============================================================
-# SUMMARY
-# ============================================================
-
-print()
-print("=" * 60)
-print("DONE")
-print("=" * 60)
-
-print(f"Original rows              : {len(df):,}")
-print(f"Rows containing multiple   : {multiple_phone_rows:,}")
-print(f"Final rows                 : {len(result):,}")
-
-print()
-print("Nothing deleted.")
-print("No deduplication.")
-print("No TELE normalization.")
-print("No TYPE column.")
-print()
-print(f"Output: {OUTPUT_FILE}")
+if __name__ == "__main__":
+    main()
