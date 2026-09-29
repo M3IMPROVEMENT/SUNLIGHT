@@ -1,8 +1,9 @@
 import openpyxl
 import re
+from functools import lru_cache
 
 # ============================================================
-# CHANGE ONLY THESE 2 PATHS
+# CHANGE ONLY THESE TWO PATHS
 # ============================================================
 
 INPUT_FILE = r"C:\Users\YourName\Desktop\input.xlsx"
@@ -12,16 +13,25 @@ TELE_COLUMN = "TELE"
 
 
 # ============================================================
-# GET DIGITS FROM A PHONE VALUE
+# BASIC CLEANING
 # ============================================================
 
 def digits_only(value):
+    """
+    Keep digits only.
+
+    Examples:
+        0475/12 34 56  -> 0475123456
+        +32 475 12 34  -> 324751234
+        0032 475...    -> 0032475...
+    """
+
     if value is None:
         return ""
 
     text = str(value).strip()
 
-    # Excel number such as 010881429.0
+    # Excel numeric value such as 010881429.0
     if text.endswith(".0"):
         text = text[:-2]
 
@@ -29,138 +39,268 @@ def digits_only(value):
 
 
 # ============================================================
-# CLEAN ONE PHONE NUMBER
+# NORMALIZE PREFIX
 # ============================================================
 
-def clean_phone(value):
+def normalize_number(digits):
+    """
+    Convert Belgian prefixes to the same national representation.
 
-    d = digits_only(value)
+    0032XXXXXXXXX -> 0XXXXXXXXX
+    32XXXXXXXXX   -> 0XXXXXXXXX
 
-    if not d:
-        return ""
+    We do NOT remove the national 0 here.
+    """
 
-    # +32XXXXXXXXX
-    if d.startswith("32") and len(d) == 11:
-        d = d[2:]
+    if digits.startswith("0032"):
+        rest = digits[4:]
 
-    # 0032XXXXXXXXX
-    elif d.startswith("0032") and len(d) == 13:
-        d = d[4:]
+        if rest:
+            return "0" + rest
 
-    # Remove Belgian national 0
-    if d.startswith("0") and len(d) in (9, 10):
-        d = d[1:]
+    if digits.startswith("32"):
+        rest = digits[2:]
 
-    return d
+        if rest:
+            return "0" + rest
+
+    return digits
 
 
 # ============================================================
-# CHECK IF SOMETHING LOOKS LIKE A PHONE NUMBER
+# IS ONE BELGIAN PHONE NUMBER?
 # ============================================================
 
-def looks_like_phone(value):
+def is_phone(digits):
+    """
+    Belgian phone number detection.
 
-    d = digits_only(value)
+    Main Belgian national format:
+        0 + 8 digits = 9 digits total
 
-    if not d:
+    International:
+        32 + 9 digits = 11 digits
+        0032 + 9 digits = 13 digits
+
+    We also allow 10-digit national values because
+    some source files contain them.
+    """
+
+    if not digits:
         return False
 
-    # Belgian national numbers
-    # 9 digits = landline
-    # 10 digits = mobile / some Belgian formats
-    if len(d) in (9, 10) and d.startswith("0"):
+    # 0032 + 9 national digits
+    if len(digits) == 13 and digits.startswith("0032"):
         return True
 
-    # 32 + 9 digits
-    if len(d) == 11 and d.startswith("32"):
+    # 32 + 9 national digits
+    if len(digits) == 11 and digits.startswith("32"):
         return True
 
-    # 0032 + 9 digits
-    if len(d) == 13 and d.startswith("0032"):
+    # Belgian national number
+    if len(digits) in (9, 10) and digits.startswith("0"):
         return True
 
     return False
 
 
 # ============================================================
-# SPLIT TELE
+# CLEAN FINAL PHONE
 # ============================================================
 
-def split_tele(value):
+def clean_phone(digits):
 
-    if value is None:
-        return []
+    digits = digits_only(digits)
 
-    text = str(value).strip()
+    if not digits:
+        return ""
 
-    if not text:
-        return []
+    # 0032xxxxxxxxx
+    if digits.startswith("0032"):
+        digits = "0" + digits[4:]
+
+    # 32xxxxxxxxx
+    elif digits.startswith("32"):
+        digits = "0" + digits[2:]
+
+    return digits
+
+
+# ============================================================
+# FIND ALL POSSIBLE PHONE SPLITS
+# ============================================================
+
+@lru_cache(maxsize=None)
+def possible_splits(digits):
+
+    results = []
 
     # --------------------------------------------------------
-    # IMPORTANT:
-    #
-    # SPACE = possible separator between 2 phone numbers
-    #
-    # "/" is NOT used as separator.
-    #
-    # Example:
-    # 0475/252328
-    #
-    # stays ONE number.
+    # ONE NUMBER
     # --------------------------------------------------------
 
-    parts = re.split(r"\s+", text)
+    if is_phone(digits):
 
-    phone_parts = []
+        results.append((digits,))
 
-    for part in parts:
+    # --------------------------------------------------------
+    # MULTIPLE NUMBERS
+    #
+    # Try every possible Belgian phone length.
+    # --------------------------------------------------------
 
-        # Remove harmless punctuation around the value
-        part = part.strip(";,|")
+    for length in (9, 10, 11, 13):
 
-        if not part:
+        if len(digits) <= length:
             continue
 
-        if looks_like_phone(part):
+        first = digits[:length]
 
-            phone_parts.append(part)
+        if not is_phone(first):
+            continue
 
-        else:
+        rest = digits[length:]
 
-            # Sometimes there can be punctuation between numbers.
-            # Try extracting phone-looking sequences without
-            # destroying a slash inside a number.
+        for solution in possible_splits(rest):
 
-            possible = re.findall(
-                r"(?:\+?32|0032)?0?\d[\d/.-]{7,}",
-                part
+            results.append(
+                (first,) + solution
             )
 
-            if possible:
+    # Remove duplicates
+    unique = []
 
-                for p in possible:
+    seen = set()
 
-                    if looks_like_phone(p):
-                        phone_parts.append(p)
+    for result in results:
 
-            else:
+        if result not in seen:
 
-                # Keep it for manual checking
-                phone_parts.append(part)
+            seen.add(result)
+            unique.append(result)
 
-    return phone_parts
+    return tuple(unique)
 
 
 # ============================================================
-# MAIN
+# ANALYZE ONE TELE CELL
+# ============================================================
+
+def analyze_tele(value):
+
+    if value is None:
+        return "EMPTY", [], ""
+
+    original = str(value).strip()
+
+    if not original:
+        return "EMPTY", [], ""
+
+    # --------------------------------------------------------
+    # Convert everything to digits.
+    #
+    # This means:
+    #
+    # 011 27 08 46
+    # becomes
+    # 011270846
+    #
+    # 0475/252328
+    # becomes
+    # 0475252328
+    # --------------------------------------------------------
+
+    digits = digits_only(original)
+
+    if not digits:
+        return "AMBIGUOUS", [], "No digits"
+
+    # --------------------------------------------------------
+    # VERY IMPORTANT:
+    #
+    # First check whether the ENTIRE cell is one phone.
+    #
+    # This prevents:
+    #
+    # 011 27 08 46
+    #
+    # from being treated as 4 separate pieces.
+    # --------------------------------------------------------
+
+    if is_phone(digits):
+
+        return "ONE", [digits], ""
+
+    # --------------------------------------------------------
+    # If entire value isn't one phone,
+    # search for multiple phones.
+    # --------------------------------------------------------
+
+    solutions = possible_splits(digits)
+
+    # Only keep solutions containing 2+ numbers
+    multiple = [
+        solution
+        for solution in solutions
+        if len(solution) >= 2
+    ]
+
+    # --------------------------------------------------------
+    # EXACTLY ONE POSSIBLE SPLIT
+    # --------------------------------------------------------
+
+    if len(multiple) == 1:
+
+        return "SPLIT", list(multiple[0]), ""
+
+    # --------------------------------------------------------
+    # MORE THAN ONE POSSIBLE SPLIT
+    #
+    # Do not guess.
+    # --------------------------------------------------------
+
+    if len(multiple) > 1:
+
+        examples = []
+
+        for solution in multiple[:5]:
+
+            examples.append(
+                " + ".join(
+                    clean_phone(x)
+                    for x in solution
+                )
+            )
+
+        return (
+            "AMBIGUOUS",
+            [],
+            "Several possible splits: "
+            + " || ".join(examples)
+        )
+
+    # --------------------------------------------------------
+    # NO VALID PHONE INTERPRETATION
+    # --------------------------------------------------------
+
+    return (
+        "AMBIGUOUS",
+        [],
+        f"{len(digits)} digits; no valid phone interpretation"
+    )
+
+
+# ============================================================
+# MAIN PROGRAM
 # ============================================================
 
 print("=" * 70)
-print("TELE CLEAN + SPLIT")
+print("BELGIAN TELE CLEAN + SPLIT")
 print("=" * 70)
 
-print("INPUT :", INPUT_FILE)
-print("OUTPUT:", OUTPUT_FILE)
+print()
+print("Input :", INPUT_FILE)
+print("Output:", OUTPUT_FILE)
 print()
 
 input_wb = openpyxl.load_workbook(
@@ -174,19 +314,22 @@ output_wb = openpyxl.Workbook(
 )
 
 total_rows = 0
-normal_rows = 0
+output_rows = 0
+
+one_number_rows = 0
 split_rows = 0
 manual_rows = 0
-output_rows = 0
+empty_rows = 0
 
 
 # ============================================================
-# PROCESS EVERY SHEET
+# PROCESS EACH SHEET
 # ============================================================
 
 for ws in input_wb.worksheets:
 
     print()
+    print("-" * 70)
     print("SHEET:", ws.title)
     print("-" * 70)
 
@@ -215,26 +358,27 @@ for ws in input_wb.worksheets:
 
         if value is not None:
 
-            if str(value).strip().upper() == TELE_COLUMN:
+            if str(value).strip().upper() == "TELE":
 
                 tele_index = i
                 break
 
     if tele_index is None:
 
-        print("TELE column NOT FOUND.")
+        print("WARNING: TELE column not found.")
 
         output_ws.append(header_values)
 
         for row in rows:
-            output_ws.append(
-                [cell.value for cell in row]
-            )
+
+            output_ws.append([
+                cell.value for cell in row
+            ])
 
         continue
 
     print(
-        "TELE column found:",
+        "TELE column:",
         tele_index + 1
     )
 
@@ -243,7 +387,7 @@ for ws in input_wb.worksheets:
 
 
     # ========================================================
-    # PROCESS ROWS
+    # ROWS
     # ========================================================
 
     for excel_row, row in enumerate(
@@ -254,109 +398,105 @@ for ws in input_wb.worksheets:
         total_rows += 1
 
         values = [
-            cell.value for cell in row
+            cell.value
+            for cell in row
         ]
 
         original = values[tele_index]
 
-        # ----------------------------------------------------
-        # SPLIT
-        # ----------------------------------------------------
+        status, numbers, reason = analyze_tele(
+            original
+        )
 
-        phones = split_tele(original)
 
-        if not phones:
+        # ====================================================
+        # EMPTY
+        # ====================================================
 
-            # Empty
+        if status == "EMPTY":
+
             new_row = values.copy()
+
             new_row[tele_index] = ""
 
             output_ws.append(new_row)
 
             output_rows += 1
+            empty_rows += 1
 
             continue
 
 
-        # ----------------------------------------------------
-        # MORE THAN ONE PHONE
-        # ----------------------------------------------------
+        # ====================================================
+        # ONE NUMBER
+        # ====================================================
 
-        if len(phones) >= 2:
+        if status == "ONE":
 
-            # Check that EVERY part really looks like a phone
-            all_valid = all(
-                looks_like_phone(p)
-                for p in phones
+            new_row = values.copy()
+
+            new_row[tele_index] = clean_phone(
+                numbers[0]
             )
 
-            if all_valid:
+            output_ws.append(new_row)
 
-                split_rows += 1
+            output_rows += 1
+            one_number_rows += 1
 
-                print()
-                print(
-                    f"[SPLIT] "
-                    f"Sheet={ws.title} "
-                    f"Row={excel_row}"
-                )
-
-                print(
-                    "Original:",
-                    original
-                )
-
-                print(
-                    "Numbers:",
-                    " | ".join(
-                        digits_only(p)
-                        for p in phones
-                    )
-                )
-
-                # One output row for each number
-                for phone in phones:
-
-                    new_row = values.copy()
-
-                    new_row[tele_index] = clean_phone(
-                        phone
-                    )
-
-                    output_ws.append(new_row)
-
-                    output_rows += 1
-
-                continue
+            continue
 
 
-        # ----------------------------------------------------
-        # ONE PHONE
-        # ----------------------------------------------------
+        # ====================================================
+        # SPLIT
+        # ====================================================
 
-        if len(phones) == 1:
+        if status == "SPLIT":
 
-            phone = phones[0]
+            split_rows += 1
 
-            if looks_like_phone(phone):
+            cleaned_numbers = [
+                clean_phone(number)
+                for number in numbers
+            ]
+
+            print()
+            print(
+                f"[SPLIT] "
+                f"Sheet={ws.title} "
+                f"| Excel row={excel_row}"
+            )
+
+            print(
+                "Original:",
+                original
+            )
+
+            print(
+                "Numbers:",
+                " | ".join(cleaned_numbers)
+            )
+
+            # -----------------------------------------------
+            # CREATE ONE ROW FOR EACH PHONE
+            # -----------------------------------------------
+
+            for phone in cleaned_numbers:
 
                 new_row = values.copy()
 
-                new_row[tele_index] = clean_phone(
-                    phone
-                )
+                new_row[tele_index] = phone
 
                 output_ws.append(new_row)
 
                 output_rows += 1
-                normal_rows += 1
 
-                continue
+            continue
 
 
-        # ----------------------------------------------------
-        # AMBIGUOUS
-        # ----------------------------------------------------
+        # ====================================================
+        # MANUAL CHECK
+        # ====================================================
 
         manual_rows += 1
 
@@ -364,7 +504,7 @@ for ws in input_wb.worksheets:
         print(
             f"[MANUAL CHECK] "
             f"Sheet={ws.title} "
-            f"Excel row={excel_row}"
+            f"| Excel row={excel_row}"
         )
 
         print(
@@ -377,8 +517,19 @@ for ws in input_wb.worksheets:
             digits_only(original)
         )
 
-        # Do NOT guess.
-        # Keep the cleaned digits in the same row.
+        print(
+            "Reason:",
+            reason
+        )
+
+        # ----------------------------------------------------
+        # IMPORTANT:
+        #
+        # DO NOT split an ambiguous value.
+        #
+        # Keep it in the same row after removing formatting.
+        # ----------------------------------------------------
+
         new_row = values.copy()
 
         new_row[tele_index] = digits_only(
@@ -390,9 +541,9 @@ for ws in input_wb.worksheets:
         output_rows += 1
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # PROGRESS
-        # ----------------------------------------------------
+        # ====================================================
 
         if total_rows % 10000 == 0:
 
@@ -411,7 +562,7 @@ for ws in input_wb.worksheets:
 # ============================================================
 
 print()
-print("Saving...")
+print("Saving output...")
 
 output_wb.save(
     OUTPUT_FILE
@@ -429,32 +580,21 @@ print("=" * 70)
 print("FINISHED")
 print("=" * 70)
 
-print(
-    f"Original rows : {total_rows:,}"
-)
-
-print(
-    f"Output rows   : {output_rows:,}"
-)
-
-print(
-    f"Normal rows   : {normal_rows:,}"
-)
-
-print(
-    f"Split rows    : {split_rows:,}"
-)
-
-print(
-    f"Manual check  : {manual_rows:,}"
-)
+print()
+print(f"Original rows : {total_rows:,}")
+print(f"Output rows   : {output_rows:,}")
+print(f"One number    : {one_number_rows:,}")
+print(f"Split rows    : {split_rows:,}")
+print(f"Manual check  : {manual_rows:,}")
+print(f"Empty TELE    : {empty_rows:,}")
 
 print()
-print("Duplicates were NOT removed.")
-print("Original file was NOT modified.")
+print("Duplicates: NOT removed")
+print("Original file: NOT modified")
 
 print()
 print("OUTPUT:")
 print(OUTPUT_FILE)
 
+print()
 print("=" * 70)
