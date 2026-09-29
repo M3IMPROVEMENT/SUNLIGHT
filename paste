@@ -6,203 +6,87 @@ import re
 # ============================================================
 
 INPUT_FILE = r"C:\Users\YourName\Desktop\input.xlsx"
-OUTPUT_FILE = r"C:\Users\YourName\Desktop\tele_one_number_per_row.xlsx"
+OUTPUT_FILE = r"C:\Users\YourName\Desktop\output_one_number_per_row.xlsx"
 
 TELE_COLUMN = "TELE"
 
 
 # ============================================================
-# NORMALIZE ONE PHONE NUMBER
+# DETECT AND SPLIT MULTIPLE PHONE NUMBERS
 # ============================================================
 
-def normalize_phone(phone):
-    """
-    Normalize one Belgian phone number.
-
-    Examples:
-        +32 476 12 34 56  -> 476123456
-        0032 476 12 34 56 -> 476123456
-        32 476 12 34 56   -> 476123456
-        0476 12 34 56     -> 476123456
-    """
-
-    if pd.isna(phone):
-        return ""
-
-    phone = str(phone).strip()
-
-    # Remove Excel decimal suffix
-    phone = re.sub(r"\.0+$", "", phone)
-
-    # Keep digits only
-    digits = re.sub(r"\D", "", phone)
-
-    if not digits:
-        return ""
-
-    # International Belgian prefix
-    if digits.startswith("0032"):
-        digits = digits[4:]
-
-    elif digits.startswith("32"):
-        digits = digits[2:]
-
-    # Belgian national prefix
-    elif digits.startswith("0"):
-        digits = digits[1:]
-
-    return digits
-
-
-# ============================================================
-# EXTRACT PHONE NUMBERS INTELLIGENTLY
-# ============================================================
-
-def extract_phones(value):
+def split_tele(value):
 
     if pd.isna(value):
-        return []
+        return [""]
 
     text = str(value).strip()
 
-    # Remove Excel .0
-    text = re.sub(r"\.0+$", "", text)
-
     if not text:
-        return []
+        return [""]
 
     # --------------------------------------------------------
-    # STEP 1
-    # Protect Belgian international numbers
+    # First, identify Belgian numbers in the cell.
     #
-    # Example:
+    # This recognizes:
     # +32 476 12 34 56
-    #
-    # This must stay ONE number.
-    # --------------------------------------------------------
-
-    international_pattern = re.compile(
-        r"(?:\+32|0032|32)"
-        r"(?:[\s.\-()/]*)"
-        r"(?:4[\s.\-()/]*\d{2}[\s.\-()/]*\d{2}[\s.\-()/]*\d{2}"
-        r"|[1-9]\d{7,8}(?:[\s.\-()/]*\d{1,2})?)"
-    )
-
-    protected = []
-
-    def protect(match):
-        number = match.group(0)
-        token = f"___PHONE_{len(protected)}___"
-        protected.append(number)
-        return token
-
-    text_protected = international_pattern.sub(protect, text)
-
-
-    # --------------------------------------------------------
-    # STEP 2
-    # Find normal Belgian national numbers
-    #
-    # Example:
+    # 0032 476 12 34 56
+    # 32 476 12 34 56
     # 0476 12 34 56
-    # --------------------------------------------------------
-
-    national_pattern = re.compile(
-        r"\b0[\s.\-()/]*"
-        r"(?:4[\s.\-()/]*\d{2}[\s.\-()/]*\d{2}[\s.\-()/]*\d{2}"
-        r"|[1-9](?:[\s.\-()/]*\d){7,8})\b"
-    )
-
-    national_matches = national_pattern.findall(text_protected)
-
-    # --------------------------------------------------------
-    # STEP 3
-    # Split remaining text using separators
-    # --------------------------------------------------------
-
-    # Replace separators with spaces
-    remaining = re.sub(r"[/;,|]+", " ", text_protected)
-
-    # Also handle " - " as separator,
-    # but don't destroy digits connected by a normal hyphen.
-    remaining = re.sub(r"\s+-\s+", " ", remaining)
-
-    # --------------------------------------------------------
-    # STEP 4
-    # Restore protected international numbers
-    # --------------------------------------------------------
-
-    all_candidates = []
-
-    for i, original in enumerate(protected):
-        all_candidates.append(original)
-
-    all_candidates.extend(national_matches)
-
-    # --------------------------------------------------------
-    # STEP 5
-    # Find remaining groups of digits
     #
-    # This catches cases such as:
-    # 0476123456 / 0498123456
+    # Spaces INSIDE the number are allowed.
     # --------------------------------------------------------
 
-    digit_groups = re.findall(
-        r"(?:\+?\d[\d\s().-]{7,}\d)",
-        remaining
+    pattern = re.compile(
+        r"""
+        (?:
+            \+32
+            |
+            0032
+            |
+            32
+            |
+            0
+        )
+        [\s.\-()]*
+        \d
+        (?:
+            [\s.\-()]*
+            \d
+        ){7,9}
+        """,
+        re.VERBOSE
     )
 
-    all_candidates.extend(digit_groups)
+    matches = list(pattern.finditer(text))
 
     # --------------------------------------------------------
-    # STEP 6
-    # Clean and validate candidates
+    # If we found 2+ numbers, return them separately.
     # --------------------------------------------------------
 
-    phones = []
+    if len(matches) >= 2:
 
-    for candidate in all_candidates:
+        numbers = []
 
-        cleaned = normalize_phone(candidate)
+        for match in matches:
+            number = match.group(0).strip()
 
-        if not cleaned:
-            continue
+            if number not in numbers:
+                numbers.append(number)
 
-        # Belgian GSM:
-        # after normalization = 9 digits starting with 4
-        is_gsm = (
-            len(cleaned) == 9
-            and cleaned.startswith("4")
-        )
-
-        # Belgian fixed line:
-        # generally 8-9 digits after removing 0
-        is_possible_fixed = (
-            len(cleaned) in (8, 9)
-            and cleaned[0] in "1-9"
-        )
-
-        if is_gsm or is_possible_fixed:
-            phones.append(cleaned)
+        return numbers
 
     # --------------------------------------------------------
-    # Remove duplicates inside the same cell
+    # If only one number was found, keep the ORIGINAL value.
+    # No cleaning.
     # --------------------------------------------------------
 
-    unique_phones = []
-
-    for phone in phones:
-        if phone not in unique_phones:
-            unique_phones.append(phone)
-
-    return unique_phones
+    return [text]
 
 
 # ============================================================
 # READ EXCEL
 # ============================================================
-
-print("Reading file...")
 
 df = pd.read_excel(
     INPUT_FILE,
@@ -213,110 +97,48 @@ print(f"Original rows: {len(df):,}")
 
 
 # ============================================================
-# CHECK TELE COLUMN
+# CHECK COLUMN
 # ============================================================
 
 if TELE_COLUMN not in df.columns:
     raise ValueError(
-        f"Column '{TELE_COLUMN}' was not found.\n"
-        f"Available columns: {list(df.columns)}"
+        f"Column '{TELE_COLUMN}' not found."
     )
 
 
 # ============================================================
-# SPLIT MULTIPLE NUMBERS
+# CREATE NEW ROWS
 # ============================================================
 
 new_rows = []
-
-rows_with_multiple = 0
-numbers_created = 0
-empty_rows = 0
+split_count = 0
 
 for _, row in df.iterrows():
 
-    value = row[TELE_COLUMN]
+    numbers = split_tele(row[TELE_COLUMN])
 
-    phones = extract_phones(value)
-
-    # --------------------------------------------------------
-    # EMPTY TELE
-    # Keep the row
-    # --------------------------------------------------------
-
-    if not phones:
-
-        new_row = row.copy()
-        new_row[TELE_COLUMN] = ""
-
-        new_rows.append(new_row)
-
-        empty_rows += 1
-
-        continue
-
-
-    # --------------------------------------------------------
-    # MULTIPLE NUMBERS
-    # Create one row per number
-    # --------------------------------------------------------
-
-    if len(phones) > 1:
-        rows_with_multiple += 1
-
-    for phone in phones:
+    # One or multiple numbers
+    for number in numbers:
 
         new_row = row.copy()
 
-        new_row[TELE_COLUMN] = phone
+        # ONLY change TELE
+        new_row[TELE_COLUMN] = number
 
+        # Everything else stays exactly the same
         new_rows.append(new_row)
 
-        numbers_created += 1
+    if len(numbers) > 1:
+        split_count += 1
 
 
 # ============================================================
-# CREATE NEW DATAFRAME
+# CREATE RESULT
 # ============================================================
 
 result = pd.DataFrame(
     new_rows,
     columns=df.columns
-)
-
-
-# ============================================================
-# DEDUPLICATE
-# ============================================================
-
-before_dedup = len(result)
-
-# Only deduplicate rows where TELE is not empty
-
-has_tele = result[TELE_COLUMN].ne("")
-
-with_tele = result.loc[has_tele].copy()
-without_tele = result.loc[~has_tele].copy()
-
-with_tele = with_tele.drop_duplicates(
-    subset=[TELE_COLUMN],
-    keep="first"
-)
-
-duplicates_removed = (
-    len(with_tele) - len(with_tele.drop_duplicates())
-)
-
-# Calculate correctly
-duplicates_removed = (
-    before_dedup
-    - len(with_tele)
-    - len(without_tele)
-)
-
-result = pd.concat(
-    [with_tele, without_tele],
-    ignore_index=True
 )
 
 
@@ -336,17 +158,18 @@ result.to_excel(
 # ============================================================
 
 print()
-print("=" * 60)
+print("=" * 50)
 print("DONE")
-print("=" * 60)
+print("=" * 50)
 
-print(f"Original rows              : {len(df):,}")
-print(f"Rows containing 2+ numbers : {rows_with_multiple:,}")
-print(f"Phone rows created         : {numbers_created:,}")
-print(f"Empty TELE rows kept       : {empty_rows:,}")
-print(f"Duplicates removed         : {duplicates_removed:,}")
-print(f"Final rows                 : {len(result):,}")
+print(f"Original rows          : {len(df):,}")
+print(f"Rows with 2+ numbers   : {split_count:,}")
+print(f"Final rows             : {len(result):,}")
 
 print()
-print("Output file:")
-print(OUTPUT_FILE)
+print("No rows deleted.")
+print("No deduplication.")
+print("No TELE cleaning.")
+print("No TYPE column.")
+print()
+print(f"Output: {OUTPUT_FILE}")
