@@ -6,16 +6,16 @@ import re
 # ============================================================
 
 INPUT_FILE = r"C:\Users\YourName\Desktop\input.xlsx"
-OUTPUT_FILE = r"C:\Users\YourName\Desktop\output_one_number_per_row.xlsx"
+OUTPUT_FILE = r"C:\Users\YourName\Desktop\TELE_split.xlsx"
 
 TELE_COLUMN = "TELE"
 
 
 # ============================================================
-# DETECT AND SPLIT MULTIPLE PHONE NUMBERS
+# FIND BELGIAN PHONE NUMBERS
 # ============================================================
 
-def split_tele(value):
+def find_phone_numbers(value):
 
     if pd.isna(value):
         return [""]
@@ -26,67 +26,91 @@ def split_tele(value):
         return [""]
 
     # --------------------------------------------------------
-    # First, identify Belgian numbers in the cell.
+    # Belgian GSM / telephone patterns
     #
-    # This recognizes:
+    # We allow spaces, dots, hyphens and parentheses
+    # INSIDE the number.
+    #
+    # Examples:
     # +32 476 12 34 56
     # 0032 476 12 34 56
     # 32 476 12 34 56
     # 0476 12 34 56
-    #
-    # Spaces INSIDE the number are allowed.
+    # 0476123456
     # --------------------------------------------------------
 
-    pattern = re.compile(
+    phone_pattern = re.compile(
         r"""
+        (?<!\d)
+
         (?:
-            \+32
-            |
-            0032
-            |
-            32
-            |
-            0
-        )
-        [\s.\-()]*
-        \d
-        (?:
+            # International format
+            (?:\+|00)?32
             [\s.\-()]*
             \d
-        ){7,9}
+            (?:[\s.\-()]*\d){8}
+
+            |
+
+            # Belgian national format
+            0
+            [\s.\-()]*
+            \d
+            (?:[\s.\-()]*\d){8}
+        )
+
+        (?!\d)
         """,
         re.VERBOSE
     )
 
-    matches = list(pattern.finditer(text))
+    matches = list(phone_pattern.finditer(text))
 
     # --------------------------------------------------------
-    # If we found 2+ numbers, return them separately.
+    # No multiple numbers detected
+    # Keep original value EXACTLY.
     # --------------------------------------------------------
 
-    if len(matches) >= 2:
-
-        numbers = []
-
-        for match in matches:
-            number = match.group(0).strip()
-
-            if number not in numbers:
-                numbers.append(number)
-
-        return numbers
+    if len(matches) == 0:
+        return [text]
 
     # --------------------------------------------------------
-    # If only one number was found, keep the ORIGINAL value.
-    # No cleaning.
+    # Extract matches
     # --------------------------------------------------------
 
-    return [text]
+    phones = []
+
+    for match in matches:
+
+        phone = match.group(0).strip()
+
+        if phone and phone not in phones:
+            phones.append(phone)
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    #
+    # If only ONE number was detected, keep the ORIGINAL CELL.
+    # We don't clean or modify it.
+    # --------------------------------------------------------
+
+    if len(phones) == 1:
+        return [text]
+
+    # --------------------------------------------------------
+    # Multiple numbers detected.
+    #
+    # Return each number as its own row.
+    # --------------------------------------------------------
+
+    return phones
 
 
 # ============================================================
 # READ EXCEL
 # ============================================================
+
+print("Reading Excel file...")
 
 df = pd.read_excel(
     INPUT_FILE,
@@ -102,34 +126,50 @@ print(f"Original rows: {len(df):,}")
 
 if TELE_COLUMN not in df.columns:
     raise ValueError(
-        f"Column '{TELE_COLUMN}' not found."
+        f"Column '{TELE_COLUMN}' was not found."
     )
 
 
 # ============================================================
-# CREATE NEW ROWS
+# SPLIT ROWS
 # ============================================================
 
 new_rows = []
-split_count = 0
+
+multiple_phone_rows = 0
+total_new_phone_rows = 0
 
 for _, row in df.iterrows():
 
-    numbers = split_tele(row[TELE_COLUMN])
+    phones = find_phone_numbers(row[TELE_COLUMN])
 
-    # One or multiple numbers
-    for number in numbers:
+    # --------------------------------------------------------
+    # Multiple phones found
+    # --------------------------------------------------------
 
-        new_row = row.copy()
+    if len(phones) > 1:
 
-        # ONLY change TELE
-        new_row[TELE_COLUMN] = number
+        multiple_phone_rows += 1
 
-        # Everything else stays exactly the same
-        new_rows.append(new_row)
+        for phone in phones:
 
-    if len(numbers) > 1:
-        split_count += 1
+            new_row = row.copy()
+
+            # ONLY change TELE
+            new_row[TELE_COLUMN] = phone
+
+            new_rows.append(new_row)
+
+            total_new_phone_rows += 1
+
+    # --------------------------------------------------------
+    # One or zero phone
+    # Keep original row unchanged
+    # --------------------------------------------------------
+
+    else:
+
+        new_rows.append(row.copy())
 
 
 # ============================================================
@@ -158,18 +198,18 @@ result.to_excel(
 # ============================================================
 
 print()
-print("=" * 50)
+print("=" * 60)
 print("DONE")
-print("=" * 50)
+print("=" * 60)
 
-print(f"Original rows          : {len(df):,}")
-print(f"Rows with 2+ numbers   : {split_count:,}")
-print(f"Final rows             : {len(result):,}")
+print(f"Original rows              : {len(df):,}")
+print(f"Rows containing multiple   : {multiple_phone_rows:,}")
+print(f"Final rows                 : {len(result):,}")
 
 print()
-print("No rows deleted.")
+print("Nothing deleted.")
 print("No deduplication.")
-print("No TELE cleaning.")
+print("No TELE normalization.")
 print("No TYPE column.")
 print()
 print(f"Output: {OUTPUT_FILE}")
