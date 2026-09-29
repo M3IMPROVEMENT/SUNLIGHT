@@ -6,114 +6,328 @@ from pathlib import Path
 # CONFIGURATION
 # ============================================================
 
-input_file = r"C:\Users\YourName\Desktop\input.xlsx"
-output_file = r"C:\Users\YourName\Desktop\TELE_CLEANED.xlsx"
+input_file = r"C:\Users\YourName\Desktop\TELE_CLEANED.xlsx"
+output_file = r"C:\Users\YourName\Desktop\TELE_SPLIT.xlsx"
+
+# Name of the column containing phone numbers
+TELE_COLUMN_NAME = "TELE"
+
 
 # ============================================================
-# CLEAN TELE
+# PHONE CLEANING
 # ============================================================
 
-def clean_tele(value):
+def normalize_phone(phone):
+    """
+    Convert a Belgian phone number to national format.
 
-    # Keep empty cells exactly empty
+    Examples:
+        +32 471 12 34 56  -> 0471123456
+        0032 471 12 34 56 -> 0471123456
+        32 471 12 34 56   -> 0471123456
+        0471 12 34 56     -> 0471123456
+    """
+
+    if not phone:
+        return ""
+
+    s = str(phone).strip()
+
+    # Remove Excel .0
+    if s.endswith(".0"):
+        s = s[:-2]
+
+    # Keep digits and +
+    s = re.sub(r"[^\d+]", "", s)
+
+    if not s:
+        return ""
+
+    # International Belgian format
+    if s.startswith("+32"):
+        s = "0" + s[3:]
+
+    elif s.startswith("0032"):
+        s = "0" + s[4:]
+
+    elif s.startswith("32"):
+        s = "0" + s[2:]
+
+    # Make sure Belgian national number starts with 0
+    elif not s.startswith("0") and len(s) == 9:
+        s = "0" + s
+
+    return s
+
+
+# ============================================================
+# FIND MULTIPLE PHONE NUMBERS
+# ============================================================
+
+def split_tele(value):
+
+    # Empty cell
     if value is None:
-        return None
+        return [""]
 
-    # Convert to string
-    value = str(value).strip()
+    text = str(value).strip()
 
-    # Keep empty strings empty
-    if value == "":
-        return ""
+    if not text:
+        return [""]
 
-    # Remove Excel decimal .0
-    if value.endswith(".0"):
-        value = value[:-2]
-
-    # Keep digits only
-    value = re.sub(r"\D", "", value)
-
-    if value == "":
-        return ""
+    # Remove Excel .0
+    if text.endswith(".0"):
+        text = text[:-2]
 
     # --------------------------------------------------------
-    # Remove Belgian international prefixes
+    # First try to find Belgian numbers with separators
+    #
+    # Examples:
+    # 022294111 047670726
+    # 022294111 / 047670726
+    # 02 229 41 11 / 0476 70 72 6
+    # +32 2 229 41 11 / +32 476 70 72 6
     # --------------------------------------------------------
 
-    # 0032XXXXXXXXX
-    if value.startswith("0032"):
-        value = value[4:]
+    # Replace common separators by spaces
+    cleaned = re.sub(r"[;/|,]+", " ", text)
 
-    # 32XXXXXXXXX
-    elif value.startswith("32"):
-        value = value[2:]
+    # Find digit groups
+    digit_groups = re.findall(r"(?:\+?\d[\d .-]*\d|\d+)", cleaned)
+
+    candidates = []
+
+    for group in digit_groups:
+
+        # Remove spaces, dots and hyphens
+        digits = re.sub(r"\D", "", group)
+
+        if not digits:
+            continue
+
+        # ----------------------------------------------------
+        # International Belgian number
+        # ----------------------------------------------------
+        if digits.startswith("0032"):
+            number = "0" + digits[4:]
+
+        elif digits.startswith("32") and len(digits) >= 10:
+            number = "0" + digits[2:]
+
+        # ----------------------------------------------------
+        # Belgian national number
+        # ----------------------------------------------------
+        elif digits.startswith("0"):
+            number = digits
+
+        # ----------------------------------------------------
+        # 9-digit Belgian number without leading 0
+        # ----------------------------------------------------
+        elif len(digits) == 9:
+            number = "0" + digits
+
+        else:
+            continue
+
+        # Belgian phone numbers normally have 9 or 10 digits
+        if 9 <= len(number) <= 10:
+
+            if number not in candidates:
+                candidates.append(number)
 
     # --------------------------------------------------------
-    # Remove leading 0
+    # Special case:
+    # two numbers directly next to each other
+    #
+    # Example:
+    # 022294111047670726
+    #
+    # Split into Belgian 9-digit numbers
     # --------------------------------------------------------
 
-    if value.startswith("0"):
-        value = value[1:]
+    if len(candidates) <= 1:
 
-    # Return cleaned number
-    return value
+        digits_only = re.sub(r"\D", "", text)
+
+        # Repeated Belgian national numbers
+        if len(digits_only) >= 18:
+
+            possible = []
+
+            for i in range(0, len(digits_only), 9):
+
+                part = digits_only[i:i + 9]
+
+                if len(part) == 9:
+
+                    if part.startswith("0"):
+                        possible.append(part)
+
+            if len(possible) >= 2:
+                candidates = possible
+
+    # --------------------------------------------------------
+    # If nothing was detected, keep original value
+    # --------------------------------------------------------
+
+    if not candidates:
+
+        return [text]
+
+    return candidates
 
 
 # ============================================================
-# OPEN EXCEL
+# OPEN INPUT
 # ============================================================
 
 print("Opening Excel...")
+print(input_file)
 
-wb = openpyxl.load_workbook(input_file)
+wb_in = openpyxl.load_workbook(
+    input_file,
+    read_only=True,
+    data_only=False
+)
 
-for ws in wb.worksheets:
+# ============================================================
+# CREATE OUTPUT WORKBOOK
+# ============================================================
+
+wb_out = openpyxl.Workbook(write_only=True)
+
+total_original_rows = 0
+total_output_rows = 0
+total_split_rows = 0
+total_numbers_found = 0
+
+for ws_in in wb_in.worksheets:
+
+    print()
+    print("Processing sheet:", ws_in.title)
+
+    ws_out = wb_out.create_sheet(title=ws_in.title)
+
+    # --------------------------------------------------------
+    # Read header
+    # --------------------------------------------------------
+
+    rows = ws_in.iter_rows()
+
+    header = next(rows)
+
+    header_values = [cell.value for cell in header]
 
     # Find TELE column
-    tele_col = None
+    tele_index = None
 
-    for cell in ws[1]:
-        if cell.value is not None:
-            header = str(cell.value).strip().upper()
+    for i, value in enumerate(header_values):
 
-            if header == "TELE":
-                tele_col = cell.column
+        if value is not None:
+
+            if str(value).strip().upper() == TELE_COLUMN_NAME:
+
+                tele_index = i
                 break
 
-    if tele_col is None:
-        print(f"TELE column not found in sheet: {ws.title}")
+    if tele_index is None:
+
+        print("WARNING: TELE column not found.")
+        print("Sheet copied without splitting.")
+
+        ws_out.append(header_values)
+
+        for row in rows:
+            ws_out.append([cell.value for cell in row])
+
         continue
 
-    print(f"Cleaning TELE in sheet: {ws.title}")
+    print("TELE column:", tele_index + 1)
+
+    # Write header
+    ws_out.append(header_values)
 
     # --------------------------------------------------------
-    # Clean TELE WITHOUT removing duplicates
+    # Process rows
     # --------------------------------------------------------
 
-    for row in range(2, ws.max_row + 1):
+    for row in rows:
 
-        cell = ws.cell(row=row, column=tele_col)
+        total_original_rows += 1
 
-        # Keep empty rows/cells
-        if cell.value is None:
-            continue
+        values = [cell.value for cell in row]
 
-        cell.value = clean_tele(cell.value)
+        tele_value = values[tele_index]
+
+        phones = split_tele(tele_value)
+
+        # ----------------------------------------------------
+        # One phone = one row
+        # ----------------------------------------------------
+
+        if len(phones) == 1:
+
+            values[tele_index] = phones[0]
+
+            ws_out.append(values)
+
+            total_output_rows += 1
+
+        # ----------------------------------------------------
+        # Multiple phones = multiple rows
+        # ----------------------------------------------------
+
+        else:
+
+            total_split_rows += 1
+            total_numbers_found += len(phones)
+
+            for phone in phones:
+
+                new_row = values.copy()
+
+                new_row[tele_index] = phone
+
+                ws_out.append(new_row)
+
+                total_output_rows += 1
+
+        # Progress
+        if total_original_rows % 10000 == 0:
+
+            print(
+                f"Rows processed: {total_original_rows:,} | "
+                f"Rows output: {total_output_rows:,}"
+            )
 
 
 # ============================================================
 # SAVE
 # ============================================================
 
-wb.save(output_file)
+print()
+print("Saving output...")
+
+wb_out.save(output_file)
+
+wb_in.close()
+
+# ============================================================
+# RESULTS
+# ============================================================
 
 print()
-print("======================================")
-print("CLEANING FINISHED")
-print("======================================")
-print(f"Output file: {output_file}")
+print("==============================================")
+print("FINISHED")
+print("==============================================")
+print(f"Original rows : {total_original_rows:,}")
+print(f"Output rows   : {total_output_rows:,}")
+print(f"Rows split    : {total_split_rows:,}")
+print(f"Phones found  : {total_numbers_found:,}")
 print()
-print("IMPORTANT:")
-print("- Duplicates were NOT removed")
-print("- Empty rows were NOT removed")
-print("- Only TELE was cleaned")
+print("Duplicates were NOT removed.")
+print("Empty TELE cells were NOT removed.")
+print()
+print("Output:")
+print(output_file)
+print("==============================================")
