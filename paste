@@ -1,246 +1,460 @@
-import pandas as pd
+import openpyxl
 import re
 
 # ============================================================
-# SETTINGS
+# CHANGE ONLY THESE 2 PATHS
 # ============================================================
 
 INPUT_FILE = r"C:\Users\YourName\Desktop\input.xlsx"
-OUTPUT_FILE = r"C:\Users\YourName\Desktop\tele_cleaned.xlsx"
+OUTPUT_FILE = r"C:\Users\YourName\Desktop\TELE_CLEAN_SPLIT.xlsx"
 
 TELE_COLUMN = "TELE"
+
+
+# ============================================================
+# GET DIGITS FROM A PHONE VALUE
+# ============================================================
+
+def digits_only(value):
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+
+    # Excel number such as 010881429.0
+    if text.endswith(".0"):
+        text = text[:-2]
+
+    return re.sub(r"\D", "", text)
 
 
 # ============================================================
 # CLEAN ONE PHONE NUMBER
 # ============================================================
 
-def clean_phone(phone):
-    if pd.isna(phone):
+def clean_phone(value):
+
+    d = digits_only(value)
+
+    if not d:
         return ""
 
-    phone = str(phone).strip()
+    # +32XXXXXXXXX
+    if d.startswith("32") and len(d) == 11:
+        d = d[2:]
 
-    # Remove Excel decimal artifact
-    phone = re.sub(r"\.0$", "", phone)
+    # 0032XXXXXXXXX
+    elif d.startswith("0032") and len(d) == 13:
+        d = d[4:]
 
-    # Keep digits only
-    digits = re.sub(r"\D", "", phone)
+    # Remove Belgian national 0
+    if d.startswith("0") and len(d) in (9, 10):
+        d = d[1:]
 
-    if not digits:
-        return ""
-
-    # Belgium international formats
-    # 0032XXXXXXXXX -> 0XXXXXXXXX
-    if digits.startswith("0032"):
-        digits = "0" + digits[4:]
-
-    # 32XXXXXXXXX -> 0XXXXXXXXX
-    elif digits.startswith("32") and len(digits) in (10, 11):
-        digits = "0" + digits[2:]
-
-    return digits
+    return d
 
 
 # ============================================================
-# EXTRACT MULTIPLE PHONES FROM ONE CELL
+# CHECK IF SOMETHING LOOKS LIKE A PHONE NUMBER
 # ============================================================
 
-def extract_phones(value):
+def looks_like_phone(value):
 
-    if pd.isna(value):
+    d = digits_only(value)
+
+    if not d:
+        return False
+
+    # Belgian national numbers
+    # 9 digits = landline
+    # 10 digits = mobile / some Belgian formats
+    if len(d) in (9, 10) and d.startswith("0"):
+        return True
+
+    # 32 + 9 digits
+    if len(d) == 11 and d.startswith("32"):
+        return True
+
+    # 0032 + 9 digits
+    if len(d) == 13 and d.startswith("0032"):
+        return True
+
+    return False
+
+
+# ============================================================
+# SPLIT TELE
+# ============================================================
+
+def split_tele(value):
+
+    if value is None:
         return []
 
     text = str(value).strip()
 
     if not text:
-        return [""]
-
-    # Remove Excel .0
-    text = re.sub(r"\.0\b", "", text)
-
-    # Normalize separators
-    text = text.replace("\n", " ")
-    text = text.replace("\r", " ")
-    text = text.replace("\t", " ")
-
-    phones = []
+        return []
 
     # --------------------------------------------------------
-    # 1. Find international Belgian numbers
+    # IMPORTANT:
+    #
+    # SPACE = possible separator between 2 phone numbers
+    #
+    # "/" is NOT used as separator.
+    #
+    # Example:
+    # 0475/252328
+    #
+    # stays ONE number.
     # --------------------------------------------------------
 
-    pattern_international = (
-        r"(?:\+32|0032|32)"
-        r"[\s./-]*"
-        r"4"
-        r"(?:[\s./-]*\d){8}"
-    )
+    parts = re.split(r"\s+", text)
 
-    matches = re.findall(pattern_international, text)
+    phone_parts = []
 
-    for match in matches:
-        cleaned = clean_phone(match)
+    for part in parts:
 
-        if cleaned:
-            phones.append(cleaned)
+        # Remove harmless punctuation around the value
+        part = part.strip(";,|")
 
-    # --------------------------------------------------------
-    # 2. Find local Belgian mobile numbers
-    # --------------------------------------------------------
+        if not part:
+            continue
 
-    pattern_local = (
-        r"\b04"
-        r"(?:[\s./-]*\d){8}"
-        r"\b"
-    )
+        if looks_like_phone(part):
 
-    matches = re.findall(pattern_local, text)
+            phone_parts.append(part)
 
-    for match in matches:
-        cleaned = clean_phone(match)
+        else:
 
-        if cleaned:
-            phones.append(cleaned)
+            # Sometimes there can be punctuation between numbers.
+            # Try extracting phone-looking sequences without
+            # destroying a slash inside a number.
 
-    # --------------------------------------------------------
-    # Remove duplicates inside SAME cell
-    # --------------------------------------------------------
+            possible = re.findall(
+                r"(?:\+?32|0032)?0?\d[\d/.-]{7,}",
+                part
+            )
 
-    phones = list(dict.fromkeys(phones))
+            if possible:
 
-    # --------------------------------------------------------
-    # If nothing found, try treating entire cell as one phone
-    # --------------------------------------------------------
+                for p in possible:
 
-    if not phones:
+                    if looks_like_phone(p):
+                        phone_parts.append(p)
 
-        cleaned = clean_phone(text)
+            else:
 
-        if cleaned:
-            phones.append(cleaned)
+                # Keep it for manual checking
+                phone_parts.append(part)
 
-    return phones
+    return phone_parts
 
 
 # ============================================================
-# READ FILE
+# MAIN
 # ============================================================
 
-print("Reading file...")
+print("=" * 70)
+print("TELE CLEAN + SPLIT")
+print("=" * 70)
 
-df = pd.read_excel(
+print("INPUT :", INPUT_FILE)
+print("OUTPUT:", OUTPUT_FILE)
+print()
+
+input_wb = openpyxl.load_workbook(
     INPUT_FILE,
-    dtype={TELE_COLUMN: "string"}
+    read_only=True,
+    data_only=False
 )
 
-print(f"Rows before processing: {len(df):,}")
+output_wb = openpyxl.Workbook(
+    write_only=True
+)
+
+total_rows = 0
+normal_rows = 0
+split_rows = 0
+manual_rows = 0
+output_rows = 0
 
 
 # ============================================================
-# CHECK TELE COLUMN
+# PROCESS EVERY SHEET
 # ============================================================
 
-if TELE_COLUMN not in df.columns:
-    raise ValueError(
-        f"Column '{TELE_COLUMN}' does not exist.\n\n"
-        f"Available columns:\n{list(df.columns)}"
+for ws in input_wb.worksheets:
+
+    print()
+    print("SHEET:", ws.title)
+    print("-" * 70)
+
+    output_ws = output_wb.create_sheet(
+        title=ws.title
     )
 
+    rows = ws.iter_rows()
 
-# ============================================================
-# SPLIT ROWS
-# ============================================================
-
-new_rows = []
-
-split_count = 0
-
-for index, row in df.iterrows():
-
-    value = row[TELE_COLUMN]
-
-    # Empty TELE -> KEEP ROW
-    if pd.isna(value) or str(value).strip() == "":
-        new_rows.append(row.copy())
+    try:
+        header = next(rows)
+    except StopIteration:
         continue
 
-    phones = extract_phones(value)
+    header_values = [
+        cell.value for cell in header
+    ]
 
-    # Nothing detected -> KEEP ORIGINAL ROW
-    if not phones:
-        new_rows.append(row.copy())
+    # --------------------------------------------------------
+    # FIND TELE COLUMN
+    # --------------------------------------------------------
+
+    tele_index = None
+
+    for i, value in enumerate(header_values):
+
+        if value is not None:
+
+            if str(value).strip().upper() == TELE_COLUMN:
+
+                tele_index = i
+                break
+
+    if tele_index is None:
+
+        print("TELE column NOT FOUND.")
+
+        output_ws.append(header_values)
+
+        for row in rows:
+            output_ws.append(
+                [cell.value for cell in row]
+            )
+
         continue
 
-    # --------------------------------------------------------
-    # ONE PHONE
-    # --------------------------------------------------------
+    print(
+        "TELE column found:",
+        tele_index + 1
+    )
 
-    if len(phones) == 1:
+    # Write header
+    output_ws.append(header_values)
 
-        new_row = row.copy()
-        new_row[TELE_COLUMN] = phones[0]
 
-        new_rows.append(new_row)
+    # ========================================================
+    # PROCESS ROWS
+    # ========================================================
 
-    # --------------------------------------------------------
-    # MULTIPLE PHONES
-    # --------------------------------------------------------
+    for excel_row, row in enumerate(
+        rows,
+        start=2
+    ):
 
-    else:
+        total_rows += 1
 
-        split_count += 1
+        values = [
+            cell.value for cell in row
+        ]
 
+        original = values[tele_index]
+
+        # ----------------------------------------------------
+        # SPLIT
+        # ----------------------------------------------------
+
+        phones = split_tele(original)
+
+        if not phones:
+
+            # Empty
+            new_row = values.copy()
+            new_row[tele_index] = ""
+
+            output_ws.append(new_row)
+
+            output_rows += 1
+
+            continue
+
+
+        # ----------------------------------------------------
+        # MORE THAN ONE PHONE
+        # ----------------------------------------------------
+
+        if len(phones) >= 2:
+
+            # Check that EVERY part really looks like a phone
+            all_valid = all(
+                looks_like_phone(p)
+                for p in phones
+            )
+
+            if all_valid:
+
+                split_rows += 1
+
+                print()
+                print(
+                    f"[SPLIT] "
+                    f"Sheet={ws.title} "
+                    f"Row={excel_row}"
+                )
+
+                print(
+                    "Original:",
+                    original
+                )
+
+                print(
+                    "Numbers:",
+                    " | ".join(
+                        digits_only(p)
+                        for p in phones
+                    )
+                )
+
+                # One output row for each number
+                for phone in phones:
+
+                    new_row = values.copy()
+
+                    new_row[tele_index] = clean_phone(
+                        phone
+                    )
+
+                    output_ws.append(new_row)
+
+                    output_rows += 1
+
+                continue
+
+
+        # ----------------------------------------------------
+        # ONE PHONE
+        # ----------------------------------------------------
+
+        if len(phones) == 1:
+
+            phone = phones[0]
+
+            if looks_like_phone(phone):
+
+                new_row = values.copy()
+
+                new_row[tele_index] = clean_phone(
+                    phone
+                )
+
+                output_ws.append(new_row)
+
+                output_rows += 1
+                normal_rows += 1
+
+                continue
+
+
+        # ----------------------------------------------------
+        # AMBIGUOUS
+        # ----------------------------------------------------
+
+        manual_rows += 1
+
+        print()
         print(
-            f"Row {index + 2} split: "
-            f"{phones}"
+            f"[MANUAL CHECK] "
+            f"Sheet={ws.title} "
+            f"Excel row={excel_row}"
         )
 
-        for phone in phones:
+        print(
+            "Original:",
+            original
+        )
 
-            new_row = row.copy()
-            new_row[TELE_COLUMN] = phone
+        print(
+            "Digits:",
+            digits_only(original)
+        )
 
-            new_rows.append(new_row)
+        # Do NOT guess.
+        # Keep the cleaned digits in the same row.
+        new_row = values.copy()
+
+        new_row[tele_index] = digits_only(
+            original
+        )
+
+        output_ws.append(new_row)
+
+        output_rows += 1
 
 
-# ============================================================
-# CREATE NEW DATAFRAME
-# ============================================================
+        # ----------------------------------------------------
+        # PROGRESS
+        # ----------------------------------------------------
 
-result = pd.DataFrame(
-    new_rows,
-    columns=df.columns
-)
+        if total_rows % 10000 == 0:
 
-# Reset index
-result.reset_index(drop=True, inplace=True)
+            print()
+            print(
+                f"Progress: "
+                f"{total_rows:,} rows | "
+                f"Output: {output_rows:,} | "
+                f"Split: {split_rows:,} | "
+                f"Manual: {manual_rows:,}"
+            )
 
 
 # ============================================================
 # SAVE
 # ============================================================
 
-result.to_excel(
-    OUTPUT_FILE,
-    index=False,
-    engine="openpyxl"
+print()
+print("Saving...")
+
+output_wb.save(
+    OUTPUT_FILE
 )
+
+input_wb.close()
 
 
 # ============================================================
-# SUMMARY
+# FINAL REPORT
 # ============================================================
 
 print()
-print("=" * 60)
-print("DONE")
-print("=" * 60)
+print("=" * 70)
+print("FINISHED")
+print("=" * 70)
 
-print(f"Original rows       : {len(df):,}")
-print(f"Final rows           : {len(result):,}")
-print(f"Rows containing 2+   : {split_count:,}")
-print(f"Rows added by split  : {len(result) - len(df):,}")
-print(f"Output file          : {OUTPUT_FILE}")
+print(
+    f"Original rows : {total_rows:,}"
+)
 
-print("=" * 60)
+print(
+    f"Output rows   : {output_rows:,}"
+)
+
+print(
+    f"Normal rows   : {normal_rows:,}"
+)
+
+print(
+    f"Split rows    : {split_rows:,}"
+)
+
+print(
+    f"Manual check  : {manual_rows:,}"
+)
+
+print()
+print("Duplicates were NOT removed.")
+print("Original file was NOT modified.")
+
+print()
+print("OUTPUT:")
+print(OUTPUT_FILE)
+
+print("=" * 70)
