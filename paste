@@ -1,125 +1,119 @@
-import pandas as pd
+import openpyxl
 import re
+from pathlib import Path
 
-# =========================
-# SETTINGS
-# =========================
-input_file = r"C:\Users\YourName\Desktop\input.xlsx"
-output_file = r"C:\Users\YourName\Desktop\TELE_cleaned_deduplicated.xlsx"
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
-# =========================
-# READ FILE
-# =========================
-df = pd.read_excel(input_file, dtype=str)
+input_file = r"C:\Users\Sunlight\Desktop\AUTO\telephone_checked_F1P1.xlsx"
+output_file = r"C:\Users\Sunlight\Desktop\AUTO\RESULT\TELE_CLEANED_F1P1.xlsx"
 
-print(f"Rows before cleaning: {len(df)}")
-
-# Make sure TELE exists
-if "TELE" not in df.columns:
-    raise ValueError("Column 'TELE' was not found in the file.")
-
-
-# =========================
+# ============================================================
 # CLEAN TELE
-# =========================
+# ============================================================
+
 def clean_tele(value):
 
-    # Keep empty cells empty
-    if pd.isna(value):
+    # Keep empty cells exactly empty
+    if value is None:
+        return None
+
+    # Convert to string
+    value = str(value).strip()
+
+    # Keep empty strings empty
+    if value == "":
         return ""
 
-    value = str(value).strip()
+    # Remove Excel decimal .0
+    if value.endswith(".0"):
+        value = value[:-2]
+
+    # Keep digits only
+    value = re.sub(r"\D", "", value)
 
     if value == "":
         return ""
 
-    # Remove Excel decimal ending
-    # Example: 0470123456.0 -> 0470123456
-    value = re.sub(r"\.0$", "", value)
+    # --------------------------------------------------------
+    # Remove Belgian international prefixes
+    # --------------------------------------------------------
 
-    # Convert common separators to space
-    value = re.sub(r"[/|;,]+", " ", value)
-
-    # Remove brackets, parentheses, dots, hyphens, etc.
-    value = re.sub(r"[\(\)\[\]\{\}\-\.]", "", value)
-
-    # Keep + only if it is at the beginning
-    if value.startswith("+"):
-        value = "+" + re.sub(r"\D", "", value[1:])
-    else:
-        value = re.sub(r"\D", "", value)
-
-    return value.strip()
-
-
-df["TELE"] = df["TELE"].apply(clean_tele)
-
-
-# =========================
-# CREATE NORMALIZED VERSION
-# FOR DUPLICATION CHECK
-# =========================
-def normalize_tele(value):
-
-    if not value:
-        return ""
-
-    value = str(value).strip()
-
-    # +32xxxxxxxxx -> 32xxxxxxxxx
-    if value.startswith("+"):
-        value = value[1:]
-
-    # 0032xxxxxxxxx -> 32xxxxxxxxx
+    # 0032XXXXXXXXX
     if value.startswith("0032"):
+        value = value[4:]
+
+    # 32XXXXXXXXX
+    elif value.startswith("32"):
         value = value[2:]
 
-    # 0xxxxxxxxx -> 32xxxxxxxxx for Belgian numbers
-    if value.startswith("0"):
-        value = "32" + value[1:]
+    # --------------------------------------------------------
+    # Remove leading 0
+    # --------------------------------------------------------
 
+    if value.startswith("0"):
+        value = value[1:]
+
+    # Return cleaned number
     return value
 
 
-df["_TELE_NORMALIZED"] = df["TELE"].apply(normalize_tele)
+# ============================================================
+# OPEN EXCEL
+# ============================================================
+
+print("Opening Excel...")
+
+wb = openpyxl.load_workbook(input_file)
+
+for ws in wb.worksheets:
+
+    # Find TELE column
+    tele_col = None
+
+    for cell in ws[1]:
+        if cell.value is not None:
+            header = str(cell.value).strip().upper()
+
+            if header == "TELE":
+                tele_col = cell.column
+                break
+
+    if tele_col is None:
+        print(f"TELE column not found in sheet: {ws.title}")
+        continue
+
+    print(f"Cleaning TELE in sheet: {ws.title}")
+
+    # --------------------------------------------------------
+    # Clean TELE WITHOUT removing duplicates
+    # --------------------------------------------------------
+
+    for row in range(2, ws.max_row + 1):
+
+        cell = ws.cell(row=row, column=tele_col)
+
+        # Keep empty rows/cells
+        if cell.value is None:
+            continue
+
+        cell.value = clean_tele(cell.value)
 
 
-# =========================
-# DEDUPLICATION
-# =========================
+# ============================================================
+# SAVE
+# ============================================================
 
-before_dedup = len(df)
+wb.save(output_file)
 
-# Do NOT remove empty TELE rows
-# Only deduplicate actual phone numbers
-non_empty = df["_TELE_NORMALIZED"] != ""
-
-# Keep first occurrence of each TELE
-duplicates_mask = (
-    non_empty &
-    df["_TELE_NORMALIZED"].duplicated(keep="first")
-)
-
-duplicates_removed = duplicates_mask.sum()
-
-df = df[~duplicates_mask].copy()
-
-
-# =========================
-# REMOVE TEMP COLUMN
-# =========================
-df.drop(columns=["_TELE_NORMALIZED"], inplace=True)
-
-
-# =========================
-# EXPORT
-# =========================
-df.to_excel(output_file, index=False)
-
-print("--------------------------------")
-print("DONE")
-print("--------------------------------")
-print(f"Rows before cleaning : {before_dedup}")
-print(f"Duplicates removed  : {duplicates_removed}")
-print(f"Rows after          : {len(df)}")
-print(f"Output file         : {output_file}")
+print()
+print("======================================")
+print("CLEANING FINISHED")
+print("======================================")
+print(f"Output file: {output_file}")
+print()
+print("IMPORTANT:")
+print("- Duplicates were NOT removed")
+print("- Empty rows were NOT removed")
+print("- Only TELE was cleaned")
