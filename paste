@@ -1,353 +1,125 @@
 import pandas as pd
 import re
-from pathlib import Path
+
+# =========================
+# SETTINGS
+# =========================
+input_file = r"C:\Users\YourName\Desktop\input.xlsx"
+output_file = r"C:\Users\YourName\Desktop\TELE_cleaned_deduplicated.xlsx"
+
+# =========================
+# READ FILE
+# =========================
+df = pd.read_excel(input_file, dtype=str)
+
+print(f"Rows before cleaning: {len(df)}")
+
+# Make sure TELE exists
+if "TELE" not in df.columns:
+    raise ValueError("Column 'TELE' was not found in the file.")
 
 
-# ============================================================
-# CONFIG
-# ============================================================
+# =========================
+# CLEAN TELE
+# =========================
+def clean_tele(value):
 
-INPUT_FILE = Path(r"C:\Users\YOUR_NAME\Desktop\cleaned_file.xlsx")
-
-OUTPUT_FILE = INPUT_FILE.with_name(
-    INPUT_FILE.stem + "_TELE_SEPARATED.xlsx"
-)
-
-TELE_COLUMN = "TELE"
-
-
-# ============================================================
-# BELGIAN PHONE NUMBER DETECTION
-# ============================================================
-
-def normalize_digits(value):
-    """
-    Convert a value to a clean string without changing
-    the actual digits.
-    """
-
+    # Keep empty cells empty
     if pd.isna(value):
         return ""
 
-    text = str(value).strip()
+    value = str(value).strip()
 
-    # Keep + because +32 can be an international prefix
-    text = re.sub(r"[^\d+]", "", text)
+    if value == "":
+        return ""
 
-    return text
+    # Remove Excel decimal ending
+    # Example: 0470123456.0 -> 0470123456
+    value = re.sub(r"\.0$", "", value)
 
+    # Convert common separators to space
+    value = re.sub(r"[/|;,]+", " ", value)
 
-def valid_belgian_phone(number):
-    """
-    Check whether a number looks like a Belgian phone number.
+    # Remove brackets, parentheses, dots, hyphens, etc.
+    value = re.sub(r"[\(\)\[\]\{\}\-\.]", "", value)
 
-    Accepted examples:
+    # Keep + only if it is at the beginning
+    if value.startswith("+"):
+        value = "+" + re.sub(r"\D", "", value[1:])
+    else:
+        value = re.sub(r"\D", "", value)
 
-        0471234567
-        0481234567
-        0491234567
+    return value.strip()
 
-        +32471234567
-        0032471234567
-        32471234567
 
-        021234567
-        031234567
-        041234567
-        071234567
-        081234567
-        091234567
-    """
+df["TELE"] = df["TELE"].apply(clean_tele)
 
-    n = number
 
-    # International +32
-    if n.startswith("+32"):
-        rest = n[3:]
-
-        # Belgian national number after +32
-        return (
-            len(rest) in (8, 9)
-            and rest.isdigit()
-            and rest.startswith(("4", "2", "3", "5", "6", "7", "8", "9"))
-        )
-
-    # International 0032
-    if n.startswith("0032"):
-        rest = n[4:]
-
-        return (
-            len(rest) in (8, 9)
-            and rest.isdigit()
-            and rest.startswith(("4", "2", "3", "5", "6", "7", "8", "9"))
-        )
-
-    # International 32
-    if n.startswith("32"):
-        rest = n[2:]
-
-        return (
-            len(rest) in (8, 9)
-            and rest.isdigit()
-            and rest.startswith(("4", "2", "3", "5", "6", "7", "8", "9"))
-        )
+# =========================
+# CREATE NORMALIZED VERSION
+# FOR DUPLICATION CHECK
+# =========================
+def normalize_tele(value):
 
-    # Belgian local format
-    if n.startswith("0"):
+    if not value:
+        return ""
 
-        # GSM: 04xx xxx xxx = 10 digits
-        if len(n) == 10 and n.startswith(("046", "047", "048", "049")):
-            return True
+    value = str(value).strip()
 
-        # Belgian fixed-line numbers
-        if len(n) in (9, 10):
-            return n[1:].isdigit()
+    # +32xxxxxxxxx -> 32xxxxxxxxx
+    if value.startswith("+"):
+        value = value[1:]
 
-    return False
+    # 0032xxxxxxxxx -> 32xxxxxxxxx
+    if value.startswith("0032"):
+        value = value[2:]
 
+    # 0xxxxxxxxx -> 32xxxxxxxxx for Belgian numbers
+    if value.startswith("0"):
+        value = "32" + value[1:]
 
-# ============================================================
-# FIND CONCATENATED NUMBERS
-# ============================================================
+    return value
 
-def split_concatenated_numbers(value):
 
-    if pd.isna(value):
-        return [""]
+df["_TELE_NORMALIZED"] = df["TELE"].apply(normalize_tele)
 
-    original = str(value).strip()
 
-    if not original:
-        return [""]
+# =========================
+# DEDUPLICATION
+# =========================
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    # Excel scientific notation is NOT split here.
-    # --------------------------------------------------------
+before_dedup = len(df)
 
-    if re.search(r"[Ee][+-]?\d+", original):
-        return [original]
+# Do NOT remove empty TELE rows
+# Only deduplicate actual phone numbers
+non_empty = df["_TELE_NORMALIZED"] != ""
 
-    # --------------------------------------------------------
-    # First normalize separators.
-    #
-    # We remove spaces, /, -, ., (, )
-    # so that:
-    #
-    # 0471 12 34 56 / 0482 98 76 54
-    #
-    # becomes:
-    #
-    # 04711234560482987654
-    # --------------------------------------------------------
-
-    text = re.sub(r"[^\d+]", "", original)
-
-    if not text:
-        return [original]
-
-    # --------------------------------------------------------
-    # If it is already a normal phone number
-    # --------------------------------------------------------
-
-    if valid_belgian_phone(text):
-        return [text]
-
-    # --------------------------------------------------------
-    # Dynamic programming:
-    #
-    # Try to find the BEST segmentation of the complete
-    # string into Belgian phone numbers.
-    #
-    # This allows:
-    #
-    # 04711234560482987654
-    #
-    # to become:
-    #
-    # 0471123456
-    # 0482987654
-    # --------------------------------------------------------
-
-    n = len(text)
-
-    # dp[i] = best list of numbers starting at position i
-    dp = [None] * (n + 1)
-
-    dp[n] = []
-
-    # Candidate lengths
-    candidate_lengths = [
-        9,   # possible Belgian fixed
-        10,  # Belgian GSM/local
-        11,  # +32 converted without +
-        12,  # 0032 converted
-        13
-    ]
-
-    for i in range(n - 1, -1, -1):
-
-        best = None
-
-        for length in candidate_lengths:
-
-            j = i + length
-
-            if j > n:
-                continue
-
-            candidate = text[i:j]
-
-            # Normal Belgian local number
-            if valid_belgian_phone(candidate):
-
-                if dp[j] is not None:
-
-                    solution = [candidate] + dp[j]
-
-                    # Prefer solutions with MORE recognized
-                    # phone numbers, because the goal is to
-                    # separate concatenated phones.
-                    if best is None:
-                        best = solution
-
-                    elif len(solution) > len(best):
-                        best = solution
-
-        dp[i] = best
-
-    # --------------------------------------------------------
-    # Full successful segmentation
-    # --------------------------------------------------------
-
-    if dp[0] is not None and len(dp[0]) >= 2:
-        return dp[0]
-
-    # --------------------------------------------------------
-    # If no complete segmentation was found, search for
-    # phone numbers INSIDE the value.
-    # --------------------------------------------------------
-
-    found = []
-
-    i = 0
-
-    while i < len(text):
-
-        found_one = False
-
-        # Try longer formats first
-        for length in (10, 9):
-
-            candidate = text[i:i + length]
-
-            if len(candidate) == length and valid_belgian_phone(candidate):
-
-                found.append(candidate)
-                i += length
-                found_one = True
-                break
-
-        if not found_one:
-            i += 1
-
-    # --------------------------------------------------------
-    # Return detected numbers if there are any.
-    # --------------------------------------------------------
-
-    if found:
-        return found
-
-    # IMPORTANT:
-    # Never delete an unrecognized value.
-    return [original]
-
-
-# ============================================================
-# READ FILE
-# ============================================================
-
-print("Reading file...")
-
-df = pd.read_excel(
-    INPUT_FILE,
-    dtype=object
+# Keep first occurrence of each TELE
+duplicates_mask = (
+    non_empty &
+    df["_TELE_NORMALIZED"].duplicated(keep="first")
 )
 
-print(f"Rows before TELE separation: {len(df):,}")
+duplicates_removed = duplicates_mask.sum()
+
+df = df[~duplicates_mask].copy()
 
 
-if TELE_COLUMN not in df.columns:
-    raise ValueError(
-        f"\nColumn '{TELE_COLUMN}' was not found.\n\n"
-        f"Available columns:\n{list(df.columns)}"
-    )
+# =========================
+# REMOVE TEMP COLUMN
+# =========================
+df.drop(columns=["_TELE_NORMALIZED"], inplace=True)
 
 
-# ============================================================
-# PROCESS
-# ============================================================
-
-new_rows = []
-
-rows_with_multiple = 0
-numbers_created = 0
-
-for _, row in df.iterrows():
-
-    tele = row[TELE_COLUMN]
-
-    numbers = split_concatenated_numbers(tele)
-
-    if len(numbers) > 1:
-        rows_with_multiple += 1
-
-    numbers_created += len(numbers)
-
-    for number in numbers:
-
-        new_row = row.copy()
-
-        new_row[TELE_COLUMN] = number
-
-        new_rows.append(new_row)
-
-
-# ============================================================
-# RESULT
-# ============================================================
-
-result = pd.DataFrame(
-    new_rows,
-    columns=df.columns
-)
-
-
-# ============================================================
+# =========================
 # EXPORT
-# ============================================================
+# =========================
+df.to_excel(output_file, index=False)
 
-result.to_excel(
-    OUTPUT_FILE,
-    index=False
-)
-
-
-# ============================================================
-# REPORT
-# ============================================================
-
-print()
-print("=" * 60)
-print("TELE SEPARATION FINISHED")
-print("=" * 60)
-
-print(f"Original rows              : {len(df):,}")
-print(f"Final rows                 : {len(result):,}")
-print(f"Additional rows created    : {len(result) - len(df):,}")
-print(f"Rows containing >1 numbers : {rows_with_multiple:,}")
-print(f"Total TELE numbers created : {numbers_created:,}")
-
-print()
-print(f"Output file:")
-print(OUTPUT_FILE)
+print("--------------------------------")
+print("DONE")
+print("--------------------------------")
+print(f"Rows before cleaning : {before_dedup}")
+print(f"Duplicates removed  : {duplicates_removed}")
+print(f"Rows after          : {len(df)}")
+print(f"Output file         : {output_file}")
