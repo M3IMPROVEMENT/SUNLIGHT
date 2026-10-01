@@ -1,119 +1,759 @@
-import openpyxl
+import os
+import json
+import sqlite3
 import re
 from pathlib import Path
+from openpyxl import load_workbook, Workbook
+
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-input_file = r"C:\Users\Sunlight\Desktop\AUTO\telephone_checked_F1P1.xlsx"
-output_file = r"C:\Users\Sunlight\Desktop\AUTO\RESULT\TELE_CLEANED_F1P1.xlsx"
+INPUT_FOLDER = Path(r"C:\DEDUP\INPUT")
+OUTPUT_FOLDER = Path(r"C:\DEDUP\OUTPUT")
+
+# Temporary SQLite database
+SQLITE_FILE = Path(r"C:\DEDUP\deduplication_temp.db")
+
+# Number of Excel rows processed at a time
+CHUNK_SIZE = 100_000
+
+# Maximum rows per output Excel file
+MAX_OUTPUT_ROWS = 1_000_000
+
+# Column used for deduplication
+TELE_COLUMN = "TELE"
+
+# Column used to give priority
+TVA_COLUMN = "TVA"
+
 
 # ============================================================
-# CLEAN TELE
+# GENERAL FUNCTIONS
 # ============================================================
 
-def clean_tele(value):
-
-    # Keep empty cells exactly empty
+def is_empty(value):
+    """
+    Returns True if a cell is considered empty.
+    """
     if value is None:
-        return None
+        return True
 
-    # Convert to string
-    value = str(value).strip()
+    if isinstance(value, str):
+        return value.strip() == ""
 
-    # Keep empty strings empty
-    if value == "":
+    return False
+
+
+def clean_text(value):
+    """
+    Convert a cell value to clean text.
+    """
+    if value is None:
         return ""
 
-    # Remove Excel decimal .0
+    # Excel sometimes gives numbers like 470123456.0
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+
+    return str(value).strip()
+
+
+# ============================================================
+# TELEPHONE NORMALIZATION
+# ============================================================
+
+def normalize_tele(value):
+    """
+    Normalize a Belgian telephone number for deduplication.
+
+    Examples:
+
+    +32 470 12 34 56
+    0032 470 12 34 56
+    32470123456
+    0470123456
+
+    -> 0470123456
+
+    IMPORTANT:
+    This assumes the TELE cell contains ONE telephone number.
+    """
+
+    if is_empty(value):
+        return ""
+
+    value = clean_text(value)
+
+    # Remove Excel's possible .0
     if value.endswith(".0"):
         value = value[:-2]
 
-    # Keep digits only
-    value = re.sub(r"\D", "", value)
+    # Keep only digits
+    digits = re.sub(r"\D", "", value)
 
-    if value == "":
+    if not digits:
         return ""
 
-    # --------------------------------------------------------
-    # Remove Belgian international prefixes
-    # --------------------------------------------------------
+    # Belgian international format
+    if digits.startswith("0032"):
+        digits = "32" + digits[4:]
 
-    # 0032XXXXXXXXX
-    if value.startswith("0032"):
-        value = value[4:]
+    # +32 becomes 32 after removing non-digits
+    if digits.startswith("32"):
+        digits = "0" + digits[2:]
 
-    # 32XXXXXXXXX
-    elif value.startswith("32"):
-        value = value[2:]
+    # Already Belgian local format
+    # 047..., 048..., 049..., etc.
+    if digits.startswith("0"):
+        return digits
 
-    # --------------------------------------------------------
-    # Remove leading 0
-    # --------------------------------------------------------
+    # Some data may contain 9 digits without the leading 0
+    # Example: 470123456
+    if len(digits) == 9:
+        return "0" + digits
 
-    if value.startswith("0"):
-        value = value[1:]
-
-    # Return cleaned number
-    return value
+    return digits
 
 
 # ============================================================
-# OPEN EXCEL
+# TVA NORMALIZATION
 # ============================================================
 
-print("Opening Excel...")
+def has_tva(value):
+    """
+    Determine whether a row contains a TVA.
+    """
 
-wb = openpyxl.load_workbook(input_file)
+    if is_empty(value):
+        return False
 
-for ws in wb.worksheets:
+    value = clean_text(value).upper()
+
+    # Remove spaces
+    value = re.sub(r"\s+", "", value)
+
+    # Ignore obvious empty-like values
+    if value in {"", "NONE", "NAN", "NULL"}:
+        return False
+
+    return True
+
+
+# ============================================================
+# SQLITE SETUP
+# ============================================================
+
+def create_database():
+    """
+    Create SQLite database used to remember TELE records.
+    """
+
+    if SQLITE_FILE.exists():
+        SQLITE_FILE.unlink()
+
+    conn = sqlite3.connect(SQLITE_FILE)
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE records (
+            tele_key TEXT PRIMARY KEY,
+            row_data TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+
+    return conn
+
+
+# ============================================================
+# CHOOSE / MERGE DUPLICATE ROWS
+# ============================================================
+
+def merge_rows(old_row, new_row, headers):
+    """
+    Decide which duplicate row should be kept.
+
+    Rules:
+
+    1. If one row has TVA and the other doesn't:
+       keep the TVA row.
+
+    2. If both have TVA:
+       prefer the row with more information.
+
+    3. If neither has TVA:
+       prefer the row with more information.
+
+    4. Fill empty cells from the other row.
+    """
+
+    tva_index = None
+
+    for i, header in enumerate(headers):
+        if str(header).strip().upper() == TVA_COLUMN.upper():
+            tva_index = i
+            break
+
+    old_has_tva = False
+    new_has_tva = False
+
+    if tva_index is not None:
+        old_has_tva = has_tva(old_row[tva_index])
+        new_has_tva = has_tva(new_row[tva_index])
+
+    # Count non-empty fields
+    old_score = sum(not is_empty(x) for x in old_row)
+    new_score = sum(not is_empty(x) for x in new_row)
+
+    # --------------------------------------------------------
+    # Decide which row is the primary row
+    # --------------------------------------------------------
+
+    if new_has_tva and not old_has_tva:
+        primary = new_row
+        secondary = old_row
+
+    elif old_has_tva and not new_has_tva:
+        primary = old_row
+        secondary = new_row
+
+    elif new_score > old_score:
+        primary = new_row
+        secondary = old_row
+
+    else:
+        primary = old_row
+        secondary = new_row
+
+    # --------------------------------------------------------
+    # Fill missing information
+    # --------------------------------------------------------
+
+    merged = list(primary)
+
+    for i in range(len(merged)):
+
+        if is_empty(merged[i]) and not is_empty(secondary[i]):
+            merged[i] = secondary[i]
+
+    return merged
+
+
+# ============================================================
+# PROCESS ONE CHUNK
+# ============================================================
+
+def process_chunk(rows, headers, conn):
+    """
+    Process a chunk of rows against SQLite.
+    """
+
+    cursor = conn.cursor()
+
+    inserted = 0
+    duplicates = 0
 
     # Find TELE column
-    tele_col = None
+    tele_index = None
 
-    for cell in ws[1]:
-        if cell.value is not None:
-            header = str(cell.value).strip().upper()
+    for i, header in enumerate(headers):
 
-            if header == "TELE":
-                tele_col = cell.column
-                break
+        if str(header).strip().upper() == TELE_COLUMN.upper():
+            tele_index = i
+            break
 
-    if tele_col is None:
-        print(f"TELE column not found in sheet: {ws.title}")
-        continue
+    if tele_index is None:
+        raise ValueError(
+            f"Column '{TELE_COLUMN}' was not found in the Excel file."
+        )
 
-    print(f"Cleaning TELE in sheet: {ws.title}")
+    for row in rows:
 
-    # --------------------------------------------------------
-    # Clean TELE WITHOUT removing duplicates
-    # --------------------------------------------------------
+        row = list(row)
 
-    for row in range(2, ws.max_row + 1):
+        # Make sure row has same number of columns
+        if len(row) < len(headers):
+            row.extend([""] * (len(headers) - len(row)))
 
-        cell = ws.cell(row=row, column=tele_col)
+        elif len(row) > len(headers):
+            row = row[:len(headers)]
 
-        # Keep empty rows/cells
-        if cell.value is None:
+        tele_value = row[tele_index]
+
+        tele_key = normalize_tele(tele_value)
+
+        # ----------------------------------------------------
+        # Empty TELE
+        # ----------------------------------------------------
+        #
+        # We DON'T deduplicate empty TELE.
+        #
+        # These rows need to be handled separately later.
+        # ----------------------------------------------------
+
+        if not tele_key:
+
+            # Create a unique artificial key
+            # so empty TELE rows are not lost.
+            cursor.execute(
+                "INSERT INTO records VALUES (?, ?)",
+                (
+                    f"__EMPTY_TELE__{id(row)}_{inserted}",
+                    json.dumps(row, ensure_ascii=False, default=str)
+                )
+            )
+
+            inserted += 1
             continue
 
-        cell.value = clean_tele(cell.value)
+        # ----------------------------------------------------
+        # Check if TELE already exists
+        # ----------------------------------------------------
+
+        cursor.execute(
+            "SELECT row_data FROM records WHERE tele_key = ?",
+            (tele_key,)
+        )
+
+        result = cursor.fetchone()
+
+        # ----------------------------------------------------
+        # TELE is new
+        # ----------------------------------------------------
+
+        if result is None:
+
+            cursor.execute(
+                "INSERT INTO records (tele_key, row_data) VALUES (?, ?)",
+                (
+                    tele_key,
+                    json.dumps(row, ensure_ascii=False, default=str)
+                )
+            )
+
+            inserted += 1
+
+        # ----------------------------------------------------
+        # TELE already exists
+        # ----------------------------------------------------
+
+        else:
+
+            duplicates += 1
+
+            old_row = json.loads(result[0])
+
+            merged_row = merge_rows(
+                old_row,
+                row,
+                headers
+            )
+
+            cursor.execute(
+                """
+                UPDATE records
+                SET row_data = ?
+                WHERE tele_key = ?
+                """,
+                (
+                    json.dumps(
+                        merged_row,
+                        ensure_ascii=False,
+                        default=str
+                    ),
+                    tele_key
+                )
+            )
+
+    conn.commit()
+
+    return inserted, duplicates
 
 
 # ============================================================
-# SAVE
+# READ EXCEL FILE IN CHUNKS
 # ============================================================
 
-wb.save(output_file)
+def process_excel_file(file_path, conn, headers_reference=None):
 
-print()
-print("======================================")
-print("CLEANING FINISHED")
-print("======================================")
-print(f"Output file: {output_file}")
-print()
-print("IMPORTANT:")
-print("- Duplicates were NOT removed")
-print("- Empty rows were NOT removed")
-print("- Only TELE was cleaned")
+    print()
+    print("=" * 70)
+    print(f"PROCESSING: {file_path.name}")
+    print("=" * 70)
+
+    wb = load_workbook(
+        filename=file_path,
+        read_only=True,
+        data_only=True
+    )
+
+    ws = wb.active
+
+    rows_iterator = ws.iter_rows(values_only=True)
+
+    # --------------------------------------------------------
+    # Read header
+    # --------------------------------------------------------
+
+    try:
+        headers = list(next(rows_iterator))
+    except StopIteration:
+        print("Empty file.")
+        wb.close()
+        return headers_reference
+
+    headers = [
+        clean_text(h)
+        for h in headers
+    ]
+
+    # --------------------------------------------------------
+    # Check that TELE exists
+    # --------------------------------------------------------
+
+    header_upper = [
+        str(h).strip().upper()
+        for h in headers
+    ]
+
+    if TELE_COLUMN.upper() not in header_upper:
+
+        wb.close()
+
+        raise ValueError(
+            f"\nERROR: '{TELE_COLUMN}' column was not found in "
+            f"{file_path.name}.\n"
+            f"Available columns:\n{headers}"
+        )
+
+    # --------------------------------------------------------
+    # First file defines the output columns
+    # --------------------------------------------------------
+
+    if headers_reference is None:
+
+        headers_reference = headers
+
+    else:
+
+        # We require the same column structure
+        if headers != headers_reference:
+
+            print("\nWARNING:")
+            print(f"{file_path.name} has different columns.")
+
+            print("\nExpected:")
+            print(headers_reference)
+
+            print("\nFound:")
+            print(headers)
+
+            wb.close()
+
+            raise ValueError(
+                "The input files do not have identical column structures."
+            )
+
+    # --------------------------------------------------------
+    # Process rows in chunks
+    # --------------------------------------------------------
+
+    chunk = []
+
+    total_rows = 0
+    total_inserted = 0
+    total_duplicates = 0
+
+    for row in rows_iterator:
+
+        chunk.append(row)
+
+        if len(chunk) >= CHUNK_SIZE:
+
+            inserted, duplicates = process_chunk(
+                chunk,
+                headers_reference,
+                conn
+            )
+
+            total_rows += len(chunk)
+            total_inserted += inserted
+            total_duplicates += duplicates
+
+            print(
+                f"Processed: {total_rows:,} rows | "
+                f"Duplicates found: {total_duplicates:,}"
+            )
+
+            chunk = []
+
+    # --------------------------------------------------------
+    # Process final smaller chunk
+    # --------------------------------------------------------
+
+    if chunk:
+
+        inserted, duplicates = process_chunk(
+            chunk,
+            headers_reference,
+            conn
+        )
+
+        total_rows += len(chunk)
+        total_inserted += inserted
+        total_duplicates += duplicates
+
+    wb.close()
+
+    print()
+    print(f"Finished: {file_path.name}")
+    print(f"Rows processed: {total_rows:,}")
+    print(f"Duplicates found: {total_duplicates:,}")
+
+    return headers_reference
+
+
+# ============================================================
+# EXPORT SQLITE TO MULTIPLE EXCEL FILES
+# ============================================================
+
+def export_results(conn, headers):
+
+    OUTPUT_FOLDER.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT row_data
+        FROM records
+    """)
+
+    output_number = 1
+    rows_in_current_file = 0
+    total_exported = 0
+
+    wb = None
+    ws = None
+
+    def create_output_workbook(number):
+
+        filename = (
+            OUTPUT_FOLDER /
+            f"deduplicated_part_{number:02d}.xlsx"
+        )
+
+        workbook = Workbook(
+            write_only=True
+        )
+
+        worksheet = workbook.create_sheet(
+            title="Data"
+        )
+
+        worksheet.append(headers)
+
+        return workbook, worksheet, filename
+
+    # --------------------------------------------------------
+    # Create first output
+    # --------------------------------------------------------
+
+    wb, ws, output_file = create_output_workbook(
+        output_number
+    )
+
+    print()
+    print("=" * 70)
+    print("EXPORTING RESULTS")
+    print("=" * 70)
+
+    for result in cursor:
+
+        row = json.loads(result[0])
+
+        # Excel cannot exceed 1,048,576 rows total.
+        # We use 1,000,000 DATA rows + 1 header.
+        if rows_in_current_file >= MAX_OUTPUT_ROWS:
+
+            wb.save(output_file)
+
+            print(
+                f"Created: {output_file.name} "
+                f"({rows_in_current_file:,} rows)"
+            )
+
+            output_number += 1
+
+            wb, ws, output_file = create_output_workbook(
+                output_number
+            )
+
+            rows_in_current_file = 0
+
+        ws.append(row)
+
+        rows_in_current_file += 1
+        total_exported += 1
+
+        if total_exported % 100_000 == 0:
+
+            print(
+                f"Exported: {total_exported:,} rows"
+            )
+
+    # --------------------------------------------------------
+    # Save final file
+    # --------------------------------------------------------
+
+    if wb is not None:
+
+        wb.save(output_file)
+
+        print(
+            f"Created: {output_file.name} "
+            f"({rows_in_current_file:,} rows)"
+        )
+
+    print()
+    print(f"TOTAL FINAL ROWS: {total_exported:,}")
+    print(f"NUMBER OF OUTPUT FILES: {output_number}")
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    print("=" * 70)
+    print("LARGE EXCEL INTELLIGENT DEDUPLICATION")
+    print("=" * 70)
+
+    # --------------------------------------------------------
+    # Check input folder
+    # --------------------------------------------------------
+
+    if not INPUT_FOLDER.exists():
+
+        print()
+        print(f"ERROR: Input folder does not exist:")
+        print(INPUT_FOLDER)
+
+        return
+
+    # --------------------------------------------------------
+    # Find Excel files
+    # --------------------------------------------------------
+
+    files = sorted(
+        [
+            f for f in INPUT_FOLDER.iterdir()
+            if f.is_file()
+            and f.suffix.lower() == ".xlsx"
+            and not f.name.startswith("~$")
+        ]
+    )
+
+    if not files:
+
+        print()
+        print("No .xlsx files found in INPUT folder.")
+
+        return
+
+    print()
+    print(f"Found {len(files)} Excel files:")
+
+    for f in files:
+        print(f"  - {f.name}")
+
+    # --------------------------------------------------------
+    # Create SQLite database
+    # --------------------------------------------------------
+
+    print()
+    print("Creating temporary SQLite database...")
+
+    conn = create_database()
+
+    headers = None
+
+    try:
+
+        # ----------------------------------------------------
+        # Process every file ONE AT A TIME
+        # ----------------------------------------------------
+
+        for file_path in files:
+
+            headers = process_excel_file(
+                file_path,
+                conn,
+                headers
+            )
+
+        # ----------------------------------------------------
+        # Export final deduplicated data
+        # ----------------------------------------------------
+
+        export_results(
+            conn,
+            headers
+        )
+
+        print()
+        print("=" * 70)
+        print("SUCCESS")
+        print("=" * 70)
+
+    except Exception as e:
+
+        print()
+        print("=" * 70)
+        print("ERROR")
+        print("=" * 70)
+
+        print(str(e))
+
+        raise
+
+    finally:
+
+        conn.close()
+
+        # ----------------------------------------------------
+        # Delete temporary SQLite database
+        # ----------------------------------------------------
+
+        if SQLITE_FILE.exists():
+
+            try:
+                SQLITE_FILE.unlink()
+
+                print()
+                print("Temporary SQLite database deleted.")
+
+            except Exception as e:
+
+                print()
+                print(
+                    "WARNING: Could not delete SQLite database:"
+                )
+
+                print(e)
+
+
+# ============================================================
+# RUN
+# ============================================================
+
+if __name__ == "__main__":
+    main()
