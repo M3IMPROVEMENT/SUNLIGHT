@@ -1,247 +1,217 @@
+import pandas as pd
+import re
 from pathlib import Path
-from openpyxl import load_workbook, Workbook
 
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-# Folder containing your Excel files
-INPUT_FOLDER = Path(r"C:\YOUR_FOLDER\EXCEL_FILES")
+INPUT_FILE = Path(r"C:\YOUR_FOLDER\your_file.xlsx")
 
-# Folder where merged files will be saved
-OUTPUT_FOLDER = Path(r"C:\YOUR_FOLDER\MERGED_OUTPUT")
-
-# Maximum DATA rows per output file
-MAX_ROWS = 1_000_000
+OUTPUT_FILE = Path(r"C:\YOUR_FOLDER\your_file_cleaned.xlsx")
 
 
 # ============================================================
-# CREATE OUTPUT FOLDER
+# CLEAN TELEPHONE
 # ============================================================
 
-OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
+def clean_tele(value):
+
+    if pd.isna(value):
+        return ""
+
+    value = str(value).strip()
+
+    # Remove Excel .0
+    if value.endswith(".0"):
+        value = value[:-2]
+
+    # Keep digits only
+    digits = re.sub(r"\D", "", value)
+
+    if not digits:
+        return ""
+
+    # --------------------------------------------------------
+    # 0032
+    # --------------------------------------------------------
+
+    if digits.startswith("0032"):
+
+        digits = digits[4:]
+
+        # 0032 0 4...
+        if digits.startswith("0"):
+            digits = digits[1:]
+
+        # Add Belgian local 0
+        digits = "0" + digits
+
+    # --------------------------------------------------------
+    # 32
+    # --------------------------------------------------------
+
+    elif digits.startswith("32"):
+
+        digits = digits[2:]
+
+        # 32 0 4...
+        if digits.startswith("0"):
+            digits = digits[1:]
+
+        # Add Belgian local 0
+        digits = "0" + digits
+
+    # --------------------------------------------------------
+    # Already Belgian local format
+    # --------------------------------------------------------
+
+    elif digits.startswith("0"):
+
+        pass
+
+    return digits
 
 
 # ============================================================
-# GET ALL EXCEL FILES
+# READ FILE
 # ============================================================
 
-excel_files = sorted(
+print("=" * 60)
+print("TELE CLEANING + DEDUPLICATION")
+print("=" * 60)
+
+print(f"Reading: {INPUT_FILE}")
+
+df = pd.read_excel(
+    INPUT_FILE,
+    dtype=str
+)
+
+print(f"Rows before: {len(df):,}")
+
+
+# ============================================================
+# FIND TELE COLUMN
+# ============================================================
+
+tele_column = None
+
+for col in df.columns:
+
+    if str(col).strip().upper() == "TELE":
+
+        tele_column = col
+        break
+
+
+if tele_column is None:
+
+    raise Exception(
+        "Column 'TELE' was not found in the Excel file."
+    )
+
+
+print(f"TELE column: {tele_column}")
+
+
+# ============================================================
+# CLEAN TELE
+# ============================================================
+
+df[tele_column] = df[tele_column].apply(
+    clean_tele
+)
+
+
+# ============================================================
+# COUNT BLANK TELE
+# ============================================================
+
+blank_tele = (
+    df[tele_column]
+    .eq("")
+    .sum()
+)
+
+
+# ============================================================
+# DEDUPLICATION
+# ============================================================
+
+before_dedup = len(df)
+
+# Separate rows with TELE
+with_tele = df[
+    df[tele_column] != ""
+].copy()
+
+# Rows without TELE
+without_tele = df[
+    df[tele_column] == ""
+].copy()
+
+# Deduplicate only rows that have TELE
+with_tele = with_tele.drop_duplicates(
+    subset=[tele_column],
+    keep="first"
+)
+
+# Put blank TELE rows back
+df = pd.concat(
     [
-        f for f in INPUT_FOLDER.iterdir()
-        if f.is_file()
-        and f.suffix.lower() == ".xlsx"
-        and not f.name.startswith("~$")
-    ]
+        with_tele,
+        without_tele
+    ],
+    ignore_index=True
+)
+
+after_dedup = len(df)
+
+duplicates_removed = (
+    before_dedup - after_dedup
 )
 
 
-print("=" * 70)
-print("EXCEL MERGE")
-print("=" * 70)
+# ============================================================
+# SAVE
+# ============================================================
 
-print(f"Excel files found: {len(excel_files):,}")
-print()
+df.to_excel(
+    OUTPUT_FILE,
+    index=False
+)
 
 
 # ============================================================
-# VARIABLES
-# ============================================================
-
-output_number = 0
-rows_in_output = 0
-total_rows = 0
-
-output_wb = None
-output_ws = None
-output_path = None
-
-
-# ============================================================
-# CREATE NEW OUTPUT FILE
-# ============================================================
-
-def create_output_file(headers):
-
-    global output_number
-    global rows_in_output
-    global output_wb
-    global output_ws
-    global output_path
-
-    # Save previous file
-    if output_wb is not None:
-
-        output_wb.save(output_path)
-        output_wb.close()
-
-        print(
-            f"   ✓ Saved: {output_path.name} "
-            f"({rows_in_output:,} rows)"
-        )
-
-    # New output number
-    output_number += 1
-
-    output_path = (
-        OUTPUT_FOLDER
-        / f"merged_{output_number:03d}.xlsx"
-    )
-
-    # Write-only workbook = much lower RAM usage
-    output_wb = Workbook(write_only=True)
-
-    output_ws = output_wb.create_sheet("Data")
-
-    # Write header
-    output_ws.append(headers)
-
-    rows_in_output = 0
-
-    print()
-    print(
-        f"📁 Creating {output_path.name}"
-    )
-
-
-# ============================================================
-# PROCESS FILES
-# ============================================================
-
-for file_number, file_path in enumerate(
-    excel_files,
-    start=1
-):
-
-    print(
-        f"[{file_number}/{len(excel_files)}] "
-        f"{file_path.name}"
-    )
-
-    try:
-
-        # Open source Excel file
-        wb = load_workbook(
-            file_path,
-            read_only=True,
-            data_only=True
-        )
-
-        ws = wb.active
-
-        # ----------------------------------------------------
-        # GET HEADER FROM FIRST ROW
-        # ----------------------------------------------------
-
-        rows = ws.iter_rows(
-            values_only=True
-        )
-
-        try:
-            headers = next(rows)
-
-        except StopIteration:
-            print("   ⚠ Empty file - skipped")
-            wb.close()
-            continue
-
-        # ----------------------------------------------------
-        # FIRST FILE / FIRST OUTPUT
-        # ----------------------------------------------------
-
-        if output_wb is None:
-
-            create_output_file(headers)
-
-        # ----------------------------------------------------
-        # READ DATA
-        # ----------------------------------------------------
-
-        file_rows = 0
-
-        for row in rows:
-
-            # If current output reached 1 million rows,
-            # create a new output file.
-            if rows_in_output >= MAX_ROWS:
-
-                create_output_file(headers)
-
-            # Add row
-            output_ws.append(row)
-
-            rows_in_output += 1
-            total_rows += 1
-            file_rows += 1
-
-        wb.close()
-
-        print(
-            f"   ✓ {file_rows:,} rows added"
-        )
-
-    except Exception as e:
-
-        print()
-        print(
-            f"   ❌ ERROR: {file_path.name}"
-        )
-        print(
-            f"      {e}"
-        )
-        print(
-            "      Continuing with next file..."
-        )
-
-
-# ============================================================
-# SAVE LAST FILE
-# ============================================================
-
-if output_wb is not None:
-
-    output_wb.save(output_path)
-    output_wb.close()
-
-    print()
-    print(
-        f"   ✓ Saved: {output_path.name} "
-        f"({rows_in_output:,} rows)"
-    )
-
-
-# ============================================================
-# FINAL SUMMARY
+# SUMMARY
 # ============================================================
 
 print()
-print("=" * 70)
-print("MERGE FINISHED")
-print("=" * 70)
-
-print(
-    f"Input files:       {len(excel_files):,}"
-)
-
-print(
-    f"Total rows:        {total_rows:,}"
-)
-
-print(
-    f"Output files:      {output_number:,}"
-)
-
-print()
-print(
-    f"Output folder:"
-)
-
-print(
-    OUTPUT_FOLDER
-)
-
-print()
-print("=" * 70)
+print("=" * 60)
 print("DONE")
-print("=" * 70)
+print("=" * 60)
+
+print(
+    f"Rows before:       {before_dedup:,}"
+)
+
+print(
+    f"Duplicates removed:{duplicates_removed:,}"
+)
+
+print(
+    f"Rows after:        {after_dedup:,}"
+)
+
+print(
+    f"Blank TELE rows:   {blank_tele:,}"
+)
+
+print()
+print(
+    f"Saved to:\n{OUTPUT_FILE}"
+)
+
+print("=" * 60)
