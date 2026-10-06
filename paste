@@ -3,14 +3,22 @@ from pathlib import Path
 import re
 
 # ==============================
-# FILE
+# INPUT FILE
 # ==============================
-file = Path(r"C:\Users\YOUR_NAME\Desktop\your_file.xlsx")
+input_file = Path(r"C:\Users\YOUR_NAME\Desktop\INPUT\your_file.xlsx")
+
+# ==============================
+# OUTPUT FOLDER
+# ==============================
+output_folder = Path(r"C:\Users\YOUR_NAME\Desktop\OUTPUT")
+
+# Create output folder if it doesn't exist
+output_folder.mkdir(parents=True, exist_ok=True)
 
 # ==============================
 # READ FILE
 # ==============================
-df = pd.read_excel(file, dtype=str)
+df = pd.read_excel(input_file, dtype=str)
 
 # ==============================
 # CLEAN TELE
@@ -25,20 +33,19 @@ def clean_tele(value):
     if value == "":
         return ""
 
-    # Remove .0 coming from Excel
+    # Remove Excel .0
     value = re.sub(r"\.0$", "", value)
 
-    # Keep only digits
+    # Keep digits only
     value = re.sub(r"\D", "", value)
 
-    # Remove Belgian international prefixes
+    # Remove Belgian prefixes
     if value.startswith("0032"):
         value = value[4:]
-
     elif value.startswith("32"):
         value = value[2:]
 
-    # Add 0 back for Belgian numbers
+    # Add 0
     if value and not value.startswith("0"):
         value = "0" + value
 
@@ -48,11 +55,12 @@ def clean_tele(value):
 df["TELE"] = df["TELE"].apply(clean_tele)
 
 # ==============================
-# SAVE
+# OUTPUT
 # ==============================
-output = file.parent / "TELE_cleaned.xlsx"
+output_file = output_folder / "TELE_cleaned.xlsx"
 
-df.to_excel(output, index=False)
+df.to_excel(output_file, index=False)
 
-print("✅ TELE cleaning finished.")
-print(f"📁 Saved: {output}")
+print("✅ Cleaning finished!")
+print(f"📂 Input : {input_file}")
+print(f"📂 Output: {output_file}")
