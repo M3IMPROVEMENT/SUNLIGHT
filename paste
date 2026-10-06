@@ -1,38 +1,52 @@
 import pandas as pd
 from pathlib import Path
+import sys
 
 # ============================================================
 # SETTINGS
 # ============================================================
 
-INPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB\excel_data-PC3")
+INPUT_FOLDER = Path(
+    r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB\excel_data-PC3"
+)
 
-# Folder where merged files will be created
-OUTPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB\excel_data-PC3\GSM\MERGE-FILES\merged_output")
+OUTPUT_FOLDER = Path(
+    r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB\excel_data-PC3\GSM\MERGE-FILES\merged_output"
+)
 
-
-# Maximum DATA rows per Excel file
+# Maximum DATA rows per Excel output file
 MAX_ROWS = 1_000_000
 
 OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
+
 # ============================================================
-# FIND FILES
+# FIND INPUT FILES
 # ============================================================
 
-files = sorted([
-    f for f in INPUT_FOLDER.glob("*.xlsx")
-    if not f.name.startswith("~$")
-])
+files = sorted(
+    [
+        f for f in INPUT_FOLDER.glob("*.xlsx")
+        if not f.name.startswith("~$")
+        and OUTPUT_FOLDER not in f.parents
+    ]
+)
 
-print(f"Found {len(files)} Excel files.")
+print("=" * 70)
+print("MERGE EXCEL FILES")
+print("=" * 70)
+
+print(f"Input folder : {INPUT_FOLDER}")
+print(f"Found files  : {len(files):,}")
+print()
+
 
 if not files:
     raise SystemExit("❌ No Excel files found.")
 
 
 # ============================================================
-# CREATE EXCEL WRITER
+# WRITER
 # ============================================================
 
 def create_writer(number):
@@ -44,10 +58,8 @@ def create_writer(number):
         engine="xlsxwriter",
         engine_kwargs={
             "options": {
-                # IMPORTANT:
-                # Keep URLs as normal text.
-                # Do NOT convert them to hyperlinks.
-                "strings_to_urls": False
+                "strings_to_urls": False,
+                "strings_to_formulas": False,
             }
         }
     )
@@ -62,43 +74,61 @@ def create_writer(number):
 # ============================================================
 
 output_number = 1
+
 current_rows = 0
 total_rows = 0
+
+processed_files = 0
+failed_files = []
 
 writer, output_path = create_writer(output_number)
 
 
 # ============================================================
-# MERGE
+# PROCESS FILES
 # ============================================================
 
 for i, file in enumerate(files, start=1):
 
+    print("=" * 70)
+    print(f"[{i}/{len(files)}] {file.name}")
+
     try:
 
-        print(f"[{i}/{len(files)}] Reading: {file.name}")
+        # ----------------------------------------------------
+        # READ EXCEL
+        # ----------------------------------------------------
 
-        df = pd.read_excel(file)
+        df = pd.read_excel(
+            file,
+            sheet_name=0,
+            dtype=object
+        )
 
         rows = len(df)
+        columns = len(df.columns)
 
-        print(f"    → {rows:,} rows")
+        print(f"Rows    : {rows:,}")
+        print(f"Columns : {columns:,}")
 
+        # Empty file
         if rows == 0:
+            print("⚠️ Empty file - nothing to write.")
+            processed_files += 1
             continue
 
 
-        # ====================================================
-        # IF FILE WOULD EXCEED 1 MILLION ROWS
-        # ====================================================
+        # ----------------------------------------------------
+        # CHECK IF OUTPUT WOULD EXCEED LIMIT
+        # ----------------------------------------------------
 
-        if current_rows + rows > MAX_ROWS:
+        if current_rows > 0 and current_rows + rows > MAX_ROWS:
 
             writer.close()
 
             print(
-                f"✅ Finished {output_path.name} "
-                f"({current_rows:,} rows)"
+                f"✅ Closed {output_path.name} "
+                f"with {current_rows:,} data rows."
             )
 
             output_number += 1
@@ -107,9 +137,9 @@ for i, file in enumerate(files, start=1):
             writer, output_path = create_writer(output_number)
 
 
-        # ====================================================
-        # WRITE DATA
-        # ====================================================
+        # ----------------------------------------------------
+        # WRITE
+        # ----------------------------------------------------
 
         df.to_excel(
             writer,
@@ -121,23 +151,39 @@ for i, file in enumerate(files, start=1):
 
         current_rows += rows
         total_rows += rows
+        processed_files += 1
+
+        print(
+            f"✅ Added {rows:,} rows "
+            f"| Current output: {current_rows:,}"
+        )
 
 
     except Exception as e:
 
-        print(f"❌ ERROR: {file.name}")
-        print(f"   {e}")
+        print()
+        print("❌❌❌ ERROR ❌❌❌")
+        print(f"File: {file.name}")
+        print(f"Error: {repr(e)}")
+        print()
+
+        failed_files.append((file.name, str(e)))
+
+        # IMPORTANT:
+        # Do NOT silently continue without recording the file.
+        continue
 
 
 # ============================================================
-# CLOSE LAST FILE
+# CLOSE LAST OUTPUT
 # ============================================================
 
 writer.close()
 
+print()
 print(
-    f"\n✅ Finished {output_path.name} "
-    f"({current_rows:,} rows)"
+    f"✅ Finished {output_path.name} "
+    f"({current_rows:,} data rows)"
 )
 
 
@@ -145,13 +191,54 @@ print(
 # FINAL SUMMARY
 # ============================================================
 
-print("\n" + "=" * 60)
+print()
+print("=" * 70)
 print("MERGE FINISHED")
-print("=" * 60)
+print("=" * 70)
 
-print(f"Input files     : {len(files):,}")
-print(f"Output files    : {output_number:,}")
-print(f"Total data rows : {total_rows:,}")
-print(f"Output folder   : {OUTPUT_FOLDER}")
+print(f"Input files found       : {len(files):,}")
+print(f"Files processed         : {processed_files:,}")
+print(f"Files failed            : {len(failed_files):,}")
+print(f"Output files created    : {output_number:,}")
+print(f"Total data rows merged  : {total_rows:,}")
+print(f"Output folder           : {OUTPUT_FOLDER}")
 
-print("=" * 60)
+# ============================================================
+# FAILED FILES
+# ============================================================
+
+if failed_files:
+
+    print()
+    print("=" * 70)
+    print("⚠️ FILES THAT WERE NOT MERGED")
+    print("=" * 70)
+
+    for filename, error in failed_files:
+        print(f"\n❌ {filename}")
+        print(f"   {error}")
+
+    # Save a report so NOTHING gets forgotten
+    report_path = OUTPUT_FOLDER / "FAILED_FILES.txt"
+
+    with open(report_path, "w", encoding="utf-8") as f:
+
+        f.write("FILES THAT WERE NOT MERGED\n")
+        f.write("=" * 70 + "\n\n")
+
+        for filename, error in failed_files:
+
+            f.write(f"FILE: {filename}\n")
+            f.write(f"ERROR: {error}\n")
+            f.write("-" * 70 + "\n")
+
+    print()
+    print(f"⚠️ Failed-file report: {report_path}")
+
+else:
+
+    print()
+    print("🎉 ALL FILES WERE MERGED SUCCESSFULLY.")
+
+
+print("=" * 70)
