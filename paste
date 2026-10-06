@@ -1,1 +1,173 @@
-=SI(I2="";"";SI(GAUCHE(I2;3)="+32";DROITE(I2;NBCAR(I2)-3);SI(GAUCHE(I2;4)="0032";DROITE(I2;NBCAR(I2)-4);SI(GAUCHE(I2;2)="32";DROITE(I2;NBCAR(I2)-2);I2))))
+import pandas as pd
+from pathlib import Path
+import math
+
+# ============================================================
+# SETTINGS
+# ============================================================
+
+# Folder containing your 2,000 Excel files
+INPUT_FOLDER = Path(r"C:\Users\YourName\Desktop\excel_files")
+
+# Folder where merged files will be created
+OUTPUT_FOLDER = Path(r"C:\Users\YourName\Desktop\merged_output")
+
+# Maximum number of DATA rows per output Excel file
+MAX_ROWS = 1_000_000
+
+
+# ============================================================
+# CREATE OUTPUT FOLDER
+# ============================================================
+
+OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# GET ALL EXCEL FILES
+# ============================================================
+
+files = sorted([
+    f for f in INPUT_FOLDER.glob("*.xlsx")
+    if not f.name.startswith("~$")
+])
+
+print(f"Found {len(files)} Excel files.")
+
+
+if not files:
+    print("❌ No Excel files found.")
+    exit()
+
+
+# ============================================================
+# VARIABLES
+# ============================================================
+
+output_number = 1
+current_rows = 0
+writer = None
+output_path = None
+
+total_rows = 0
+
+
+# ============================================================
+# FUNCTION TO CREATE A NEW OUTPUT FILE
+# ============================================================
+
+def create_writer(number):
+    path = OUTPUT_FOLDER / f"merged_{number:03d}.xlsx"
+
+    writer = pd.ExcelWriter(
+        path,
+        engine="xlsxwriter"
+    )
+
+    print(f"\n📁 Creating: {path.name}")
+
+    return writer, path
+
+
+# ============================================================
+# START
+# ============================================================
+
+writer, output_path = create_writer(output_number)
+
+
+# ============================================================
+# PROCESS FILES ONE BY ONE
+# ============================================================
+
+for i, file in enumerate(files, start=1):
+
+    try:
+
+        print(
+            f"[{i}/{len(files)}] Reading: {file.name}"
+        )
+
+        # Read the current file
+        df = pd.read_excel(file)
+
+        rows = len(df)
+
+        print(f"    → {rows:,} rows")
+
+        if rows == 0:
+            continue
+
+
+        # ----------------------------------------------------
+        # IF CURRENT OUTPUT WOULD EXCEED MAX_ROWS
+        # ----------------------------------------------------
+
+        if current_rows + rows > MAX_ROWS:
+
+            # Close current Excel file
+            writer.close()
+
+            print(
+                f"✅ Finished {output_path.name} "
+                f"({current_rows:,} rows)"
+            )
+
+            # Create next output
+            output_number += 1
+
+            writer, output_path = create_writer(output_number)
+
+            current_rows = 0
+
+
+        # ----------------------------------------------------
+        # WRITE DATA
+        # ----------------------------------------------------
+
+        df.to_excel(
+            writer,
+            sheet_name="Sheet1",
+            startrow=current_rows + 1,
+            index=False,
+            header=(current_rows == 0)
+        )
+
+        current_rows += rows
+        total_rows += rows
+
+
+    except Exception as e:
+
+        print(
+            f"❌ ERROR in {file.name}: {e}"
+        )
+
+
+# ============================================================
+# CLOSE LAST FILE
+# ============================================================
+
+if writer is not None:
+    writer.close()
+
+    print(
+        f"\n✅ Finished {output_path.name} "
+        f"({current_rows:,} rows)"
+    )
+
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+print("\n" + "=" * 60)
+print("MERGE FINISHED")
+print("=" * 60)
+
+print(f"Input files     : {len(files):,}")
+print(f"Output files    : {output_number:,}")
+print(f"Total data rows : {total_rows:,}")
+print(f"Output folder   : {OUTPUT_FOLDER}")
+
+print("=" * 60)
