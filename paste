@@ -1,179 +1,546 @@
 from pathlib import Path
-from openpyxl import load_workbook, Workbook
+from openpyxl import load_workbook
+from collections import Counter
+import openpyxl
 
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-INPUT_FOLDER = Path(
-    r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB\excel_data-PC1_TR"
-)
+MAIN_FOLDER = Path(r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB")
 
-OUTPUT_FOLDER = Path(
-    r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB\excel_data-PC1_TR\GSM\MERGED_OUTPUT"
-)
+OUTPUT_FILE = MAIN_FOLDER / "SUSPICIOUS_FILES_REPORT.xlsx"
 
-OUTPUT_FILE = OUTPUT_FOLDER / "merged_ALL.xlsx"
+EXCEL_EXTENSIONS = {".xlsx", ".xlsm"}
 
 
 # ============================================================
-# CREATE OUTPUT FOLDER
+# FIND ALL EXCEL FILES
 # ============================================================
 
-OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
-
-
-# ============================================================
-# GET INPUT FILES
-# IMPORTANT: DO NOT READ FILES FROM OUTPUT FOLDER
-# ============================================================
-
-excel_files = sorted([
-    f
-    for f in INPUT_FOLDER.iterdir()
+files = [
+    f for f in MAIN_FOLDER.rglob("*")
     if f.is_file()
-    and f.suffix.lower() == ".xlsx"
-    and not f.name.startswith("~$")
-    and f.parent.resolve() != OUTPUT_FOLDER.resolve()
-])
+    and f.suffix.lower() in EXCEL_EXTENSIONS
+    and f.name != OUTPUT_FILE.name
+]
 
-
-print("=" * 70)
-print("EXACT EXCEL MERGE")
-print("=" * 70)
-
-print(f"Input files found: {len(excel_files):,}")
-print()
+print("=" * 80)
+print(f"Main folder : {MAIN_FOLDER}")
+print(f"Excel files found : {len(files)}")
+print("=" * 80)
 
 
 # ============================================================
-# CREATE OUTPUT WORKBOOK
+# STORAGE
 # ============================================================
 
-output_wb = Workbook(write_only=True)
-output_ws = output_wb.create_sheet("Data")
+issues = []
 
+file_summary = []
 
-# ============================================================
-# VARIABLES
-# ============================================================
-
-header_written = False
-total_rows = 0
+all_header_sets = Counter()
 
 
 # ============================================================
-# PROCESS EVERY FILE
+# HELPER
 # ============================================================
 
-for file_number, file_path in enumerate(excel_files, start=1):
+def normalize(value):
+    if value is None:
+        return ""
 
-    print(
-        f"[{file_number}/{len(excel_files)}] "
-        f"{file_path.name}"
+    return str(value).strip().upper()
+
+
+def is_empty_row(values):
+    return all(
+        value is None or str(value).strip() == ""
+        for value in values
     )
 
-    file_rows = 0
+
+# ============================================================
+# FIRST PASS
+# COLLECT COMMON HEADER STRUCTURES
+# ============================================================
+
+print("\nCollecting header structures...")
+
+for file in files:
 
     try:
-
-        # Open source file
         wb = load_workbook(
-            file_path,
+            file,
             read_only=True,
-            data_only=False
+            data_only=True
         )
 
-        # Use the active sheet
-        ws = wb.active
+        for ws in wb.worksheets:
 
-        # Read rows
-        rows = ws.iter_rows(values_only=True)
+            first_row = next(
+                ws.iter_rows(
+                    min_row=1,
+                    max_row=1,
+                    values_only=True
+                ),
+                ()
+            )
 
-        # ----------------------------------------------------
-        # FIRST ROW = HEADER
-        # ----------------------------------------------------
+            headers = tuple(
+                normalize(x)
+                for x in first_row
+                if normalize(x) != ""
+            )
 
-        try:
-            header = next(rows)
-
-        except StopIteration:
-            print("   ⚠ Empty file - skipped")
-            wb.close()
-            continue
-
-
-        # ----------------------------------------------------
-        # WRITE HEADER ONLY ONCE
-        # ----------------------------------------------------
-
-        if not header_written:
-
-            output_ws.append(header)
-
-            header_written = True
-
-
-        # ----------------------------------------------------
-        # COPY EVERY OTHER ROW
-        # ----------------------------------------------------
-
-        for row in rows:
-
-            # NO FILTERING
-            # NO DEDUPLICATION
-            # NO CLEANING
-            # NO EMPTY-ROW REMOVAL
-
-            output_ws.append(row)
-
-            file_rows += 1
-            total_rows += 1
-
+            if headers:
+                all_header_sets[headers] += 1
 
         wb.close()
 
+    except Exception:
+        pass
 
-        print(
-            f"   ✓ Rows copied: {file_rows:,}"
+
+# Most common header structure
+COMMON_HEADERS = (
+    all_header_sets.most_common(1)[0][0]
+    if all_header_sets
+    else ()
+)
+
+print(f"Different header structures found: {len(all_header_sets)}")
+
+if COMMON_HEADERS:
+    print("\nMost common structure:")
+    print(COMMON_HEADERS)
+
+
+# ============================================================
+# SECOND PASS
+# CHECK EVERY FILE
+# ============================================================
+
+print("\nChecking files...\n")
+
+for index, file in enumerate(files, 1):
+
+    print(f"[{index}/{len(files)}] {file.name}")
+
+    relative_path = str(file.relative_to(MAIN_FOLDER))
+
+    try:
+
+        wb = load_workbook(
+            file,
+            read_only=True,
+            data_only=True
         )
 
+        total_rows_file = 0
+        total_sheets = len(wb.sheetnames)
+
+        if total_sheets == 0:
+
+            issues.append({
+                "FILE": file.name,
+                "PATH": relative_path,
+                "SHEET": "",
+                "ROW": "",
+                "ISSUE": "NO SHEETS",
+                "DETAIL": "Workbook contains no sheets"
+            })
+
+        for ws in wb.worksheets:
+
+            sheet_name = ws.title
+
+            # ------------------------------------------------
+            # READ FIRST ROW
+            # ------------------------------------------------
+
+            rows = ws.iter_rows(values_only=True)
+
+            try:
+                first_row = next(rows)
+            except StopIteration:
+
+                issues.append({
+                    "FILE": file.name,
+                    "PATH": relative_path,
+                    "SHEET": sheet_name,
+                    "ROW": "",
+                    "ISSUE": "EMPTY SHEET",
+                    "DETAIL": "Sheet contains no rows"
+                })
+
+                continue
+
+            headers = tuple(
+                normalize(x)
+                for x in first_row
+                if normalize(x) != ""
+            )
+
+            # ------------------------------------------------
+            # EMPTY HEADER
+            # ------------------------------------------------
+
+            if not headers:
+
+                issues.append({
+                    "FILE": file.name,
+                    "PATH": relative_path,
+                    "SHEET": sheet_name,
+                    "ROW": 1,
+                    "ISSUE": "EMPTY HEADER",
+                    "DETAIL": "First row is empty"
+                })
+
+            # ------------------------------------------------
+            # DIFFERENT HEADER STRUCTURE
+            # ------------------------------------------------
+
+            elif COMMON_HEADERS and headers != COMMON_HEADERS:
+
+                issues.append({
+                    "FILE": file.name,
+                    "PATH": relative_path,
+                    "SHEET": sheet_name,
+                    "ROW": 1,
+                    "ISSUE": "DIFFERENT HEADER",
+                    "DETAIL": (
+                        f"Found {len(headers)} columns instead of "
+                        f"{len(COMMON_HEADERS)}"
+                    )
+                })
+
+            # ------------------------------------------------
+            # DUPLICATE HEADERS
+            # ------------------------------------------------
+
+            header_counter = Counter(headers)
+
+            duplicated_headers = [
+                h for h, count in header_counter.items()
+                if count > 1
+            ]
+
+            if duplicated_headers:
+
+                issues.append({
+                    "FILE": file.name,
+                    "PATH": relative_path,
+                    "SHEET": sheet_name,
+                    "ROW": 1,
+                    "ISSUE": "DUPLICATE HEADER",
+                    "DETAIL": ", ".join(duplicated_headers)
+                })
+
+            # ------------------------------------------------
+            # CHECK DATA ROWS
+            # ------------------------------------------------
+
+            sheet_rows = 1
+            empty_rows = 0
+            repeated_headers = 0
+            suspicious_rows = 0
+
+            header_set = set(headers)
+
+            for row_number, row in enumerate(rows, start=2):
+
+                sheet_rows += 1
+                total_rows_file += 1
+
+                values = list(row)
+
+                # --------------------------------------------
+                # EMPTY ROW
+                # --------------------------------------------
+
+                if is_empty_row(values):
+
+                    empty_rows += 1
+                    continue
+
+                normalized_values = [
+                    normalize(x)
+                    for x in values
+                ]
+
+                # --------------------------------------------
+                # REPEATED HEADER
+                # --------------------------------------------
+
+                non_empty_values = tuple(
+                    x for x in normalized_values
+                    if x != ""
+                )
+
+                if non_empty_values == headers:
+
+                    repeated_headers += 1
+
+                    issues.append({
+                        "FILE": file.name,
+                        "PATH": relative_path,
+                        "SHEET": sheet_name,
+                        "ROW": row_number,
+                        "ISSUE": "REPEATED HEADER",
+                        "DETAIL": "Header appears again inside the data"
+                    })
+
+                    continue
+
+                # --------------------------------------------
+                # SUSPICIOUS URL / NAME / WEBSITE ROW
+                # --------------------------------------------
+
+                joined = " ".join(normalized_values)
+
+                suspicious_words = [
+                    "URL",
+                    "WEBSITE",
+                    "NAME",
+                    "LINK"
+                ]
+
+                suspicious_count = sum(
+                    1 for word in suspicious_words
+                    if word in normalized_values
+                )
+
+                if suspicious_count >= 2:
+
+                    suspicious_rows += 1
+
+                    issues.append({
+                        "FILE": file.name,
+                        "PATH": relative_path,
+                        "SHEET": sheet_name,
+                        "ROW": row_number,
+                        "ISSUE": "SUSPICIOUS HEADER-LIKE ROW",
+                        "DETAIL": joined[:300]
+                    })
+
+                # --------------------------------------------
+                # ROW WITH MUCH MORE/FAR FEWER COLUMNS
+                # --------------------------------------------
+
+                non_empty_count = sum(
+                    1 for x in values
+                    if x is not None and str(x).strip() != ""
+                )
+
+                if headers and non_empty_count > len(headers) + 5:
+
+                    suspicious_rows += 1
+
+                    issues.append({
+                        "FILE": file.name,
+                        "PATH": relative_path,
+                        "SHEET": sheet_name,
+                        "ROW": row_number,
+                        "ISSUE": "UNUSUAL COLUMN COUNT",
+                        "DETAIL": (
+                            f"Header columns: {len(headers)} | "
+                            f"Non-empty cells: {non_empty_count}"
+                        )
+                    })
+
+            # ------------------------------------------------
+            # TOO MANY EMPTY ROWS
+            # ------------------------------------------------
+
+            if empty_rows > 0:
+
+                issues.append({
+                    "FILE": file.name,
+                    "PATH": relative_path,
+                    "SHEET": sheet_name,
+                    "ROW": "",
+                    "ISSUE": "EMPTY ROWS",
+                    "DETAIL": f"{empty_rows} empty rows found"
+                })
+
+            # ------------------------------------------------
+            # SHEET SUMMARY
+            # ------------------------------------------------
+
+            file_summary.append({
+                "FILE": file.name,
+                "PATH": relative_path,
+                "SHEET": sheet_name,
+                "ROWS": sheet_rows,
+                "COLUMNS": len(headers),
+                "EMPTY_ROWS": empty_rows,
+                "REPEATED_HEADERS": repeated_headers,
+                "SUSPICIOUS_ROWS": suspicious_rows
+            })
+
+        wb.close()
 
     except Exception as e:
 
-        print()
-        print(f"   ❌ ERROR: {file_path.name}")
-        print(f"      {e}")
-        print("      Continuing...")
-        print()
+        issues.append({
+            "FILE": file.name,
+            "PATH": relative_path,
+            "SHEET": "",
+            "ROW": "",
+            "ISSUE": "ERROR READING FILE",
+            "DETAIL": str(e)[:500]
+        })
 
 
 # ============================================================
-# SAVE ONE OUTPUT FILE
+# CREATE REPORT
 # ============================================================
 
-print()
-print("Saving output file...")
+print("\nCreating report...")
 
-output_wb.save(OUTPUT_FILE)
-output_wb.close()
+from openpyxl import Workbook
+
+report_wb = Workbook()
+
+# ============================================================
+# SHEET 1 - ISSUES
+# ============================================================
+
+ws = report_wb.active
+ws.title = "SUSPICIOUS_ISSUES"
+
+headers = [
+    "FILE",
+    "PATH",
+    "SHEET",
+    "ROW",
+    "ISSUE",
+    "DETAIL"
+]
+
+ws.append(headers)
+
+for issue in issues:
+
+    ws.append([
+        issue["FILE"],
+        issue["PATH"],
+        issue["SHEET"],
+        issue["ROW"],
+        issue["ISSUE"],
+        issue["DETAIL"]
+    ])
 
 
 # ============================================================
-# FINAL SUMMARY
+# SHEET 2 - FILE SUMMARY
 # ============================================================
 
-print()
-print("=" * 70)
-print("MERGE FINISHED")
-print("=" * 70)
+ws2 = report_wb.create_sheet("FILE_SUMMARY")
 
-print(f"Input files : {len(excel_files):,}")
-print(f"Data rows   : {total_rows:,}")
-print(f"Output file : {OUTPUT_FILE}")
+summary_headers = [
+    "FILE",
+    "PATH",
+    "SHEET",
+    "ROWS",
+    "COLUMNS",
+    "EMPTY_ROWS",
+    "REPEATED_HEADERS",
+    "SUSPICIOUS_ROWS"
+]
 
-print()
-print("=" * 70)
+ws2.append(summary_headers)
+
+for item in file_summary:
+
+    ws2.append([
+        item["FILE"],
+        item["PATH"],
+        item["SHEET"],
+        item["ROWS"],
+        item["COLUMNS"],
+        item["EMPTY_ROWS"],
+        item["REPEATED_HEADERS"],
+        item["SUSPICIOUS_ROWS"]
+    ])
+
+
+# ============================================================
+# SHEET 3 - HEADER STRUCTURES
+# ============================================================
+
+ws3 = report_wb.create_sheet("HEADER_STRUCTURES")
+
+ws3.append([
+    "COUNT",
+    "NUMBER_OF_COLUMNS",
+    "HEADERS"
+])
+
+for header_set, count in all_header_sets.most_common():
+
+    ws3.append([
+        count,
+        len(header_set),
+        " | ".join(header_set)
+    ])
+
+
+# ============================================================
+# FORMAT
+# ============================================================
+
+for sheet in report_wb.worksheets:
+
+    sheet.freeze_panes = "A2"
+
+    for cell in sheet[1]:
+
+        cell.font = cell.font.copy(bold=True)
+
+    for column in sheet.columns:
+
+        max_length = 0
+        column_letter = column[0].column_letter
+
+        for cell in column:
+
+            try:
+                length = len(str(cell.value))
+                max_length = max(max_length, length)
+            except:
+                pass
+
+        sheet.column_dimensions[column_letter].width = min(
+            max(max_length + 2, 12),
+            60
+        )
+
+
+# ============================================================
+# SAVE
+# ============================================================
+
+report_wb.save(OUTPUT_FILE)
+
+
+# ============================================================
+# FINAL RESULT
+# ============================================================
+
+print("\n" + "=" * 80)
 print("DONE")
-print("=" * 70)
+print("=" * 80)
+
+print(f"Excel files scanned : {len(files)}")
+print(f"Sheets scanned      : {len(file_summary)}")
+print(f"Suspicious issues   : {len(issues)}")
+
+print("\nReport:")
+print(OUTPUT_FILE)
+
+print("\nIMPORTANT:")
+print("Original Excel files were NOT modified.")
+print("=" * 80)
