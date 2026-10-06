@@ -14,7 +14,7 @@ OUTPUT_FOLDER = Path(
     r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB\excel_data-PC1_TR\GSM\MERGED_OUTPUT"
 )
 
-MAX_DATA_ROWS = 1_000_000
+OUTPUT_FILE = OUTPUT_FOLDER / "merged_ALL.xlsx"
 
 
 # ============================================================
@@ -25,91 +25,49 @@ OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
-# GET EXCEL FILES
+# GET INPUT FILES
+# IMPORTANT: DO NOT READ FILES FROM OUTPUT FOLDER
 # ============================================================
 
-excel_files = sorted(
-    f for f in INPUT_FOLDER.iterdir()
+excel_files = sorted([
+    f
+    for f in INPUT_FOLDER.iterdir()
     if f.is_file()
     and f.suffix.lower() == ".xlsx"
     and not f.name.startswith("~$")
-    and OUTPUT_FOLDER not in f.parents
-)
+    and f.parent.resolve() != OUTPUT_FOLDER.resolve()
+])
 
 
 print("=" * 70)
 print("EXACT EXCEL MERGE")
 print("=" * 70)
-print(f"Files found: {len(excel_files):,}")
+
+print(f"Input files found: {len(excel_files):,}")
 print()
+
+
+# ============================================================
+# CREATE OUTPUT WORKBOOK
+# ============================================================
+
+output_wb = Workbook(write_only=True)
+output_ws = output_wb.create_sheet("Data")
 
 
 # ============================================================
 # VARIABLES
 # ============================================================
 
-output_number = 0
-total_data_rows = 0
-rows_in_current_output = 0
-
-output_wb = None
-output_ws = None
-output_path = None
-
-header = None
+header_written = False
+total_rows = 0
 
 
 # ============================================================
-# CREATE OUTPUT
+# PROCESS EVERY FILE
 # ============================================================
 
-def create_output():
-
-    global output_number
-    global rows_in_current_output
-    global output_wb
-    global output_ws
-    global output_path
-
-    # Save previous output
-    if output_wb is not None:
-
-        output_wb.save(output_path)
-        output_wb.close()
-
-        print(
-            f"   ✓ Saved {output_path.name} "
-            f"→ {rows_in_current_output:,} data rows"
-        )
-
-    output_number += 1
-
-    output_path = (
-        OUTPUT_FOLDER /
-        f"merged_{output_number:03d}.xlsx"
-    )
-
-    output_wb = Workbook(write_only=True)
-
-    output_ws = output_wb.create_sheet("Data")
-
-    # Header only once
-    output_ws.append(header)
-
-    rows_in_current_output = 0
-
-    print()
-    print(f"📁 Creating: {output_path.name}")
-
-
-# ============================================================
-# PROCESS FILES
-# ============================================================
-
-for file_number, file_path in enumerate(
-    excel_files,
-    start=1
-):
+for file_number, file_path in enumerate(excel_files, start=1):
 
     print(
         f"[{file_number}/{len(excel_files)}] "
@@ -120,70 +78,65 @@ for file_number, file_path in enumerate(
 
     try:
 
+        # Open source file
         wb = load_workbook(
-            filename=file_path,
+            file_path,
             read_only=True,
             data_only=False
         )
 
+        # Use the active sheet
         ws = wb.active
 
-        rows = ws.iter_rows(
-            values_only=True
-        )
+        # Read rows
+        rows = ws.iter_rows(values_only=True)
 
         # ----------------------------------------------------
-        # READ HEADER
+        # FIRST ROW = HEADER
         # ----------------------------------------------------
 
         try:
-            file_header = next(rows)
+            header = next(rows)
 
         except StopIteration:
-            print("   ⚠ Empty worksheet")
+            print("   ⚠ Empty file - skipped")
             wb.close()
             continue
 
 
         # ----------------------------------------------------
-        # FIRST FILE
+        # WRITE HEADER ONLY ONCE
         # ----------------------------------------------------
 
-        if header is None:
+        if not header_written:
 
-            header = file_header
+            output_ws.append(header)
 
-            create_output()
+            header_written = True
 
 
         # ----------------------------------------------------
-        # MERGE ALL DATA ROWS
+        # COPY EVERY OTHER ROW
         # ----------------------------------------------------
 
         for row in rows:
 
-            # New output when limit reached
-            if rows_in_current_output >= MAX_DATA_ROWS:
-
-                create_output()
-
-            # IMPORTANT:
-            # No filtering
-            # No deduplication
-            # No cleaning
-            # No empty-row removal
+            # NO FILTERING
+            # NO DEDUPLICATION
+            # NO CLEANING
+            # NO EMPTY-ROW REMOVAL
 
             output_ws.append(row)
 
-            rows_in_current_output += 1
-            total_data_rows += 1
             file_rows += 1
+            total_rows += 1
 
 
         wb.close()
 
+
         print(
-            f"   ✓ Added: {file_rows:,} rows"
+            f"   ✓ Rows copied: {file_rows:,}"
         )
 
 
@@ -197,23 +150,18 @@ for file_number, file_path in enumerate(
 
 
 # ============================================================
-# SAVE LAST OUTPUT
+# SAVE ONE OUTPUT FILE
 # ============================================================
 
-if output_wb is not None:
+print()
+print("Saving output file...")
 
-    output_wb.save(output_path)
-    output_wb.close()
-
-    print()
-    print(
-        f"   ✓ Saved {output_path.name} "
-        f"→ {rows_in_current_output:,} data rows"
-    )
+output_wb.save(OUTPUT_FILE)
+output_wb.close()
 
 
 # ============================================================
-# FINAL RESULT
+# FINAL SUMMARY
 # ============================================================
 
 print()
@@ -221,12 +169,10 @@ print("=" * 70)
 print("MERGE FINISHED")
 print("=" * 70)
 
-print(f"Input files:       {len(excel_files):,}")
-print(f"Total DATA rows:   {total_data_rows:,}")
-print(f"Output files:      {output_number:,}")
-print()
-print(f"Output folder:")
-print(OUTPUT_FOLDER)
+print(f"Input files : {len(excel_files):,}")
+print(f"Data rows   : {total_rows:,}")
+print(f"Output file : {OUTPUT_FILE}")
+
 print()
 print("=" * 70)
 print("DONE")
