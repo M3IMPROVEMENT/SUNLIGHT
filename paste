@@ -1,69 +1,59 @@
 import pandas as pd
 from pathlib import Path
 
-# ==============================
-# INPUT FILE
-# ==============================
-input_file = Path(r"C:\Users\YOUR_NAME\Desktop\OUTPUT\TELE_cleaned.xlsx")
+# Folder containing your Excel files
+folder = Path(r"C:\Users\YOUR_NAME\Desktop\FILES")
 
-# ==============================
-# OUTPUT FOLDER
-# ==============================
-output_folder = Path(r"C:\Users\YOUR_NAME\Desktop\DEDUPLICATED")
+COLUMN = "VILLE"
 
-output_folder.mkdir(parents=True, exist_ok=True)
+files_with_ville = []
 
-# ==============================
-# READ FILE
-# ==============================
-df = pd.read_excel(input_file, dtype=str)
+for file in folder.glob("*.xlsx"):
 
-before = len(df)
+    try:
+        df = pd.read_excel(file, dtype=str)
 
-# Make sure TELE is treated as text
-df["TELE"] = df["TELE"].fillna("").astype(str).str.strip()
+        # Check if column exists
+        if COLUMN not in df.columns:
+            print(f"⚠️ {file.name} → VILLE column not found")
+            continue
 
-# ==============================
-# DEDUPLICATION
-# ==============================
+        # Find non-empty VILLE
+        ville = df[COLUMN].fillna("").astype(str).str.strip()
 
-# Keep empty TELE rows
-empty_tele = df[df["TELE"] == ""]
+        non_empty = ville != ""
+        count = non_empty.sum()
 
-# Deduplicate only non-empty TELE
-non_empty_tele = df[df["TELE"] != ""]
+        if count > 0:
+            files_with_ville.append({
+                "Fichier": file.name,
+                "Chemin": str(file),
+                "VILLE non vide": count
+            })
 
-non_empty_tele = non_empty_tele.drop_duplicates(
-    subset=["TELE"],
-    keep="first"
-)
+            print(f"❌ {file.name} → {count} non-empty VILLE")
 
-# Put everything back together
-df_final = pd.concat(
-    [non_empty_tele, empty_tele],
-    ignore_index=True
-)
+        else:
+            print(f"✅ {file.name} → VILLE empty")
 
-after = len(df_final)
-duplicates_removed = before - after
+    except Exception as e:
+        print(f"⚠️ Error with {file.name}: {e}")
 
-# ==============================
-# SAVE
-# ==============================
-output_file = output_folder / "TELE_cleaned_deduplicated.xlsx"
 
-df_final.to_excel(output_file, index=False)
+# Save results
+if files_with_ville:
 
-# ==============================
-# RESULTS
-# ==============================
-print("================================")
-print("DEDUPLICATION FINISHED")
-print("================================")
+    result = pd.DataFrame(files_with_ville)
 
-print(f"Rows before       : {before:,}")
-print(f"Rows after        : {after:,}")
-print(f"Duplicates removed: {duplicates_removed:,}")
+    output = folder / "files_with_non_empty_VILLE.xlsx"
+    result.to_excel(output, index=False)
 
-print(f"\n📁 Output:")
-print(output_file)
+    print("\n================================")
+    print("FILES WITH NON-EMPTY VILLE")
+    print("================================")
+    print(result.to_string(index=False))
+
+    print(f"\n📁 Saved to: {output}")
+
+else:
+    print("\n✅ All files have an empty VILLE column.")
