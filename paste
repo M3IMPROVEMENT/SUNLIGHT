@@ -1,30 +1,20 @@
 import pandas as pd
 from pathlib import Path
-import math
 
 # ============================================================
 # SETTINGS
 # ============================================================
 
-# Folder containing your 2,000 Excel files
 INPUT_FOLDER = Path(r"C:\Users\YourName\Desktop\excel_files")
-
-# Folder where merged files will be created
 OUTPUT_FOLDER = Path(r"C:\Users\YourName\Desktop\merged_output")
 
-# Maximum number of DATA rows per output Excel file
+# Maximum DATA rows per Excel file
 MAX_ROWS = 1_000_000
-
-
-# ============================================================
-# CREATE OUTPUT FOLDER
-# ============================================================
 
 OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
-
 # ============================================================
-# GET ALL EXCEL FILES
+# FIND FILES
 # ============================================================
 
 files = sorted([
@@ -34,10 +24,34 @@ files = sorted([
 
 print(f"Found {len(files)} Excel files.")
 
-
 if not files:
-    print("❌ No Excel files found.")
-    exit()
+    raise SystemExit("❌ No Excel files found.")
+
+
+# ============================================================
+# CREATE EXCEL WRITER
+# ============================================================
+
+def create_writer(number):
+
+    output_path = OUTPUT_FOLDER / f"merged_{number:03d}.xlsx"
+
+    writer = pd.ExcelWriter(
+        output_path,
+        engine="xlsxwriter",
+        engine_kwargs={
+            "options": {
+                # IMPORTANT:
+                # Keep URLs as normal text.
+                # Do NOT convert them to hyperlinks.
+                "strings_to_urls": False
+            }
+        }
+    )
+
+    print(f"\n📁 Creating: {output_path.name}")
+
+    return writer, output_path
 
 
 # ============================================================
@@ -46,49 +60,21 @@ if not files:
 
 output_number = 1
 current_rows = 0
-writer = None
-output_path = None
-
 total_rows = 0
-
-
-# ============================================================
-# FUNCTION TO CREATE A NEW OUTPUT FILE
-# ============================================================
-
-def create_writer(number):
-    path = OUTPUT_FOLDER / f"merged_{number:03d}.xlsx"
-
-    writer = pd.ExcelWriter(
-        path,
-        engine="xlsxwriter"
-    )
-
-    print(f"\n📁 Creating: {path.name}")
-
-    return writer, path
-
-
-# ============================================================
-# START
-# ============================================================
 
 writer, output_path = create_writer(output_number)
 
 
 # ============================================================
-# PROCESS FILES ONE BY ONE
+# MERGE
 # ============================================================
 
 for i, file in enumerate(files, start=1):
 
     try:
 
-        print(
-            f"[{i}/{len(files)}] Reading: {file.name}"
-        )
+        print(f"[{i}/{len(files)}] Reading: {file.name}")
 
-        # Read the current file
         df = pd.read_excel(file)
 
         rows = len(df)
@@ -99,13 +85,12 @@ for i, file in enumerate(files, start=1):
             continue
 
 
-        # ----------------------------------------------------
-        # IF CURRENT OUTPUT WOULD EXCEED MAX_ROWS
-        # ----------------------------------------------------
+        # ====================================================
+        # IF FILE WOULD EXCEED 1 MILLION ROWS
+        # ====================================================
 
         if current_rows + rows > MAX_ROWS:
 
-            # Close current Excel file
             writer.close()
 
             print(
@@ -113,17 +98,15 @@ for i, file in enumerate(files, start=1):
                 f"({current_rows:,} rows)"
             )
 
-            # Create next output
             output_number += 1
+            current_rows = 0
 
             writer, output_path = create_writer(output_number)
 
-            current_rows = 0
 
-
-        # ----------------------------------------------------
+        # ====================================================
         # WRITE DATA
-        # ----------------------------------------------------
+        # ====================================================
 
         df.to_excel(
             writer,
@@ -139,26 +122,24 @@ for i, file in enumerate(files, start=1):
 
     except Exception as e:
 
-        print(
-            f"❌ ERROR in {file.name}: {e}"
-        )
+        print(f"❌ ERROR: {file.name}")
+        print(f"   {e}")
 
 
 # ============================================================
 # CLOSE LAST FILE
 # ============================================================
 
-if writer is not None:
-    writer.close()
+writer.close()
 
-    print(
-        f"\n✅ Finished {output_path.name} "
-        f"({current_rows:,} rows)"
-    )
+print(
+    f"\n✅ Finished {output_path.name} "
+    f"({current_rows:,} rows)"
+)
 
 
 # ============================================================
-# SUMMARY
+# FINAL SUMMARY
 # ============================================================
 
 print("\n" + "=" * 60)
