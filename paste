@@ -1,81 +1,59 @@
 import pandas as pd
 from pathlib import Path
 
-# ==============================
-# DOSSIER CONTENANT LES FICHIERS
-# ==============================
+# Folder containing your Excel files
 folder = Path(r"C:\Users\YOUR_NAME\Desktop\FILES")
 
-# ==============================
-# PARAMÈTRES
-# ==============================
-CP_COLUMN = "CP"
+COLUMN = "COMPLEMENT"
 
-# ==============================
-# VÉRIFICATION
-# ==============================
-wrong_files = []
+files_with_complement = []
 
 for file in folder.glob("*.xlsx"):
 
     try:
         df = pd.read_excel(file, dtype=str)
 
-        # Vérifier si la colonne CP existe
-        if CP_COLUMN not in df.columns:
-            print(f"⚠️ Colonne CP absente : {file.name}")
+        # Check if column exists
+        if COLUMN not in df.columns:
+            print(f"⚠️ {file.name} → COMPLEMENT column not found")
             continue
 
-        # Nettoyage léger uniquement pour le contrôle
-        cp = (
-            df[CP_COLUMN]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.replace(r"\.0$", "", regex=True)
-        )
+        # Find non-empty COMPLEMENT
+        complement = df[COLUMN].fillna("").astype(str).str.strip()
 
-        # CP valide = exactement 4 chiffres
-        wrong_mask = (cp != "") & (~cp.str.fullmatch(r"\d{4}"))
+        non_empty = complement != ""
+        count = non_empty.sum()
 
-        wrong_count = wrong_mask.sum()
-
-        if wrong_count > 0:
-            wrong_files.append({
+        if count > 0:
+            files_with_complement.append({
                 "Fichier": file.name,
                 "Chemin": str(file),
-                "CP incorrects": wrong_count
+                "COMPLEMENT non vide": count
             })
 
-            print(
-                f"❌ {file.name} → "
-                f"{wrong_count} CP incorrect(s)"
-            )
+            print(f"❌ {file.name} → {count} non-empty COMPLEMENT")
 
         else:
-            print(f"✅ {file.name} → CP OK")
+            print(f"✅ {file.name} → COMPLEMENT empty")
 
     except Exception as e:
-        print(f"⚠️ Erreur avec {file.name}: {e}")
+        print(f"⚠️ Error with {file.name}: {e}")
 
 
-# ==============================
-# RÉSULTAT
-# ==============================
-if wrong_files:
+# Save results
+if files_with_complement:
 
-    result = pd.DataFrame(wrong_files)
+    result = pd.DataFrame(files_with_complement)
 
-    output = folder / "files_with_wrong_CP.xlsx"
+    output = folder / "files_with_non_empty_COMPLEMENT.xlsx"
     result.to_excel(output, index=False)
 
     print("\n================================")
-    print("FICHIERS AVEC CP INCORRECTS")
+    print("FILES WITH NON-EMPTY COMPLEMENT")
     print("================================")
     print(result.to_string(index=False))
 
-    print(f"\n📁 Résultat sauvegardé ici :")
-    print(output)
+    print(f"\n📁 Saved to: {output}")
 
 else:
-    print("\n✅ Aucun fichier avec un CP incorrect.")
+    print("\n✅ All files have an empty COMPLEMENT column.")
