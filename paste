@@ -1,6 +1,5 @@
 from pathlib import Path
 from openpyxl import load_workbook, Workbook
-import csv
 
 # ============================================================
 # SETTINGS
@@ -9,156 +8,52 @@ import csv
 INPUT_FOLDER = Path(r"C:\Users\YourName\Desktop\excel_files")
 OUTPUT_FOLDER = Path(r"C:\Users\YourName\Desktop\merged_output")
 
-MAX_DATA_ROWS = 1_000_000
+# Maximum data rows per output file
+MAX_ROWS = 1_000_000
 
 OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
-# FIND FILES
+# FIND ALL EXCEL FILES
 # ============================================================
 
-files = sorted([
+files = sorted(
     f for f in INPUT_FOLDER.glob("*.xlsx")
     if not f.name.startswith("~$")
-])
-
-print("=" * 70)
-print(f"FOUND {len(files)} EXCEL FILES")
-print("=" * 70)
-
-
-if not files:
-    raise Exception("No Excel files found.")
-
-
-# ============================================================
-# EXPECTED HEADER
-# ============================================================
-
-EXPECTED_HEADER = [
-    "name",
-    "address",
-    "postal_code",
-    "phone",
-    "website",
-    "review",
-    "total_review",
-    "url"
-]
-
-
-# ============================================================
-# READ HEADER FROM FIRST FILE
-# ============================================================
-
-wb = load_workbook(
-    files[0],
-    read_only=True,
-    data_only=False
 )
 
-ws = wb.worksheets[0]
-
-header = list(
-    next(
-        ws.iter_rows(
-            min_row=1,
-            max_row=1,
-            values_only=True
-        )
-    )
-)
-
-wb.close()
-
-
-print("\nHEADER FOUND:")
-print(header)
-
-print("\nEXPECTED HEADER:")
-print(EXPECTED_HEADER)
+print(f"Found {len(files)} files")
 
 
 # ============================================================
-# HEADER CHECK
-# ============================================================
-
-if header != EXPECTED_HEADER:
-
-    print("\n⚠️ WARNING: HEADER IS DIFFERENT!")
-
-    print("Found:")
-    print(header)
-
-    print("Expected:")
-    print(EXPECTED_HEADER)
-
-else:
-
-    print("\n✅ Header is correct.")
-
-
-# ============================================================
-# CREATE OUTPUT
-# ============================================================
-
-def create_output(number):
-
-    path = OUTPUT_FOLDER / f"merged_{number:03d}.xlsx"
-
-    wb = Workbook(write_only=True)
-    ws = wb.create_sheet("Sheet1")
-
-    # Write header
-    ws.append(header)
-
-    print("\n" + "-" * 70)
-    print(f"CREATING {path.name}")
-    print("-" * 70)
-
-    return wb, ws, path
-
-
-# ============================================================
-# INITIALIZE
+# VARIABLES
 # ============================================================
 
 output_number = 1
-
-output_data_rows = 0
-total_data_rows = 0
-
-output_wb, output_ws, output_path = create_output(
-    output_number
-)
+output_rows = 0
+total_rows = 0
 
 
 # ============================================================
-# DIAGNOSTIC LOG
+# CREATE FIRST OUTPUT
 # ============================================================
 
-log = []
+output_path = OUTPUT_FOLDER / f"merged_{output_number:03d}.xlsx"
+
+output_wb = Workbook(write_only=True)
+output_ws = output_wb.create_sheet("Sheet1")
 
 
 # ============================================================
-# PROCESS FILES
+# MERGE
 # ============================================================
 
-for file_number, file in enumerate(files, start=1):
+for i, file in enumerate(files, start=1):
 
-    print("\n")
-    print("=" * 70)
-    print(f"[{file_number}/{len(files)}] {file.name}")
-    print("=" * 70)
-
-    file_rows_copied = 0
+    print(f"[{i}/{len(files)}] {file.name}")
 
     try:
-
-        # ----------------------------------------------------
-        # OPEN FILE
-        # ----------------------------------------------------
 
         wb = load_workbook(
             file,
@@ -168,248 +63,62 @@ for file_number, file in enumerate(files, start=1):
 
         ws = wb.worksheets[0]
 
-        # ----------------------------------------------------
-        # GET EXCEL DIMENSIONS
-        # ----------------------------------------------------
+        rows_in_file = 0
 
-        max_row = ws.max_row
-        max_column = ws.max_column
+        # ====================================================
+        # COPY EVERYTHING
+        # INCLUDING HEADER
+        # ====================================================
 
-        expected_data_rows = max(
-            0,
-            max_row - 1
-        )
+        for row in ws.iter_rows(values_only=True):
 
-        print(
-            f"Excel reports:"
-        )
+            # ------------------------------------------------
+            # If output reaches limit, create another file
+            # ------------------------------------------------
 
-        print(
-            f"   Rows    : {max_row:,}"
-        )
-
-        print(
-            f"   Columns : {max_column}"
-        )
-
-        print(
-            f"Expected data rows: "
-            f"{expected_data_rows:,}"
-        )
-
-
-        # ----------------------------------------------------
-        # CHECK HEADER OF THIS FILE
-        # ----------------------------------------------------
-
-        current_header = list(
-            next(
-                ws.iter_rows(
-                    min_row=1,
-                    max_row=1,
-                    values_only=True
-                )
-            )
-        )
-
-        if current_header != header:
-
-            print(
-                "\n⚠️ HEADER DIFFERENT!"
-            )
-
-            print(
-                "This file:"
-            )
-
-            print(
-                current_header
-            )
-
-
-        # ----------------------------------------------------
-        # READ DATA
-        # ----------------------------------------------------
-
-        for row in ws.iter_rows(
-            min_row=2,
-            max_row=max_row,
-            values_only=True
-        ):
-
-            # =================================================
-            # IMPORTANT:
-            # DO NOT FILTER ANY ROW
-            # =================================================
-
-            row = list(row)
-
-
-            # -------------------------------------------------
-            # Keep exactly 8 columns
-            # -------------------------------------------------
-
-            if len(row) < len(header):
-
-                row += [None] * (
-                    len(header) - len(row)
-                )
-
-            elif len(row) > len(header):
-
-                row = row[:len(header)]
-
-
-            # -------------------------------------------------
-            # CREATE NEW OUTPUT WHEN LIMIT REACHED
-            # -------------------------------------------------
-
-            if output_data_rows >= MAX_DATA_ROWS:
+            if output_rows >= MAX_ROWS:
 
                 output_wb.save(output_path)
 
                 print(
-                    f"\n💾 Saved {output_path.name}"
-                )
-
-                print(
-                    f"   Rows: "
-                    f"{output_data_rows:,}"
+                    f"   Saved: {output_path.name} "
+                    f"({output_rows:,} rows)"
                 )
 
                 output_number += 1
+                output_rows = 0
 
-                output_data_rows = 0
-
-                output_wb, output_ws, output_path = (
-                    create_output(output_number)
+                output_path = (
+                    OUTPUT_FOLDER /
+                    f"merged_{output_number:03d}.xlsx"
                 )
 
+                output_wb = Workbook(write_only=True)
+                output_ws = output_wb.create_sheet("Sheet1")
 
-            # -------------------------------------------------
-            # COPY ROW
-            # -------------------------------------------------
+            # ------------------------------------------------
+            # COPY ROW EXACTLY
+            # ------------------------------------------------
 
-            output_ws.append(row)
+            output_ws.append(list(row))
 
-            output_data_rows += 1
-
-            total_data_rows += 1
-
-            file_rows_copied += 1
-
-
-        # ----------------------------------------------------
-        # CLOSE INPUT
-        # ----------------------------------------------------
+            output_rows += 1
+            total_rows += 1
+            rows_in_file += 1
 
         wb.close()
 
-
-        # ----------------------------------------------------
-        # COMPARE COUNTS
-        # ----------------------------------------------------
-
-        difference = (
-            file_rows_copied
-            -
-            expected_data_rows
-        )
-
-
         print(
-            f"\nRESULT:"
+            f"   Copied: {rows_in_file:,} rows"
         )
-
-        print(
-            f"   Expected : "
-            f"{expected_data_rows:,}"
-        )
-
-        print(
-            f"   Copied   : "
-            f"{file_rows_copied:,}"
-        )
-
-        print(
-            f"   Difference: "
-            f"{difference:,}"
-        )
-
-
-        # ----------------------------------------------------
-        # WARNING IF DIFFERENT
-        # ----------------------------------------------------
-
-        if difference != 0:
-
-            print(
-                "\n🚨🚨🚨 WARNING 🚨🚨🚨"
-            )
-
-            print(
-                f"{abs(difference):,} "
-                f"rows difference in this file!"
-            )
-
-
-        else:
-
-            print(
-                "   ✅ File copied completely"
-            )
-
-
-        # ----------------------------------------------------
-        # SAVE LOG
-        # ----------------------------------------------------
-
-        log.append({
-
-            "file": file.name,
-
-            "excel_max_row": max_row,
-
-            "expected_data_rows":
-                expected_data_rows,
-
-            "copied_rows":
-                file_rows_copied,
-
-            "difference":
-                difference
-
-        })
-
 
     except Exception as e:
 
         print(
-            "\n❌ ERROR!"
+            f"   ❌ ERROR: {file.name}"
         )
 
-        print(
-            f"File: {file.name}"
-        )
-
-        print(
-            f"Error: {e}"
-        )
-
-
-        log.append({
-
-            "file": file.name,
-
-            "excel_max_row": "",
-
-            "expected_data_rows": "",
-
-            "copied_rows": "",
-
-            "difference": "ERROR"
-
-        })
+        print(e)
 
 
 # ============================================================
@@ -418,93 +127,14 @@ for file_number, file in enumerate(files, start=1):
 
 output_wb.save(output_path)
 
-print(
-    f"\n💾 Saved {output_path.name}"
-)
-
-print(
-    f"Rows: {output_data_rows:,}"
-)
-
-
-# ============================================================
-# SAVE DIAGNOSTIC LOG
-# ============================================================
-
-log_path = OUTPUT_FOLDER / "merge_diagnostic.csv"
-
-with open(
-    log_path,
-    "w",
-    newline="",
-    encoding="utf-8-sig"
-) as f:
-
-    writer = csv.DictWriter(
-        f,
-        fieldnames=[
-            "file",
-            "excel_max_row",
-            "expected_data_rows",
-            "copied_rows",
-            "difference"
-        ]
-    )
-
-    writer.writeheader()
-
-    writer.writerows(log)
-
-
-# ============================================================
-# FINAL TOTALS
-# ============================================================
-
-expected_total = sum(
-    int(x["expected_data_rows"])
-    for x in log
-    if str(x["expected_data_rows"]).isdigit()
-)
-
-copied_total = sum(
-    int(x["copied_rows"])
-    for x in log
-    if str(x["copied_rows"]).isdigit()
-)
-
-total_difference = (
-    copied_total - expected_total
-)
-
-
-print("\n")
-print("=" * 70)
-print("MERGE DIAGNOSTIC FINISHED")
-print("=" * 70)
-
-print(
-    f"Input files          : {len(files):,}"
-)
-
-print(
-    f"Expected data rows   : {expected_total:,}"
-)
-
-print(
-    f"Copied data rows     : {copied_total:,}"
-)
-
-print(
-    f"Difference           : {total_difference:,}"
-)
-
 print()
-print(
-    f"Diagnostic file:"
-)
+print("=" * 60)
+print("MERGE FINISHED")
+print("=" * 60)
 
-print(
-    log_path
-)
+print(f"Files processed : {len(files):,}")
+print(f"Output files    : {output_number:,}")
+print(f"Total rows      : {total_rows:,}")
+print(f"Output folder   : {OUTPUT_FOLDER}")
 
-print("=" * 70)
+print("=" * 60)
