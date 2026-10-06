@@ -1,18 +1,16 @@
 import pandas as pd
 from pathlib import Path
-import re
 
 # ==============================
 # INPUT FILE
 # ==============================
-input_file = Path(r"C:\Users\YOUR_NAME\Desktop\INPUT\your_file.xlsx")
+input_file = Path(r"C:\Users\YOUR_NAME\Desktop\OUTPUT\TELE_cleaned.xlsx")
 
 # ==============================
 # OUTPUT FOLDER
 # ==============================
-output_folder = Path(r"C:\Users\YOUR_NAME\Desktop\OUTPUT")
+output_folder = Path(r"C:\Users\YOUR_NAME\Desktop\DEDUPLICATED")
 
-# Create output folder if it doesn't exist
 output_folder.mkdir(parents=True, exist_ok=True)
 
 # ==============================
@@ -20,47 +18,52 @@ output_folder.mkdir(parents=True, exist_ok=True)
 # ==============================
 df = pd.read_excel(input_file, dtype=str)
 
-# ==============================
-# CLEAN TELE
-# ==============================
-def clean_tele(value):
+before = len(df)
 
-    if pd.isna(value):
-        return ""
-
-    value = str(value).strip()
-
-    if value == "":
-        return ""
-
-    # Remove Excel .0
-    value = re.sub(r"\.0$", "", value)
-
-    # Keep digits only
-    value = re.sub(r"\D", "", value)
-
-    # Remove Belgian prefixes
-    if value.startswith("0032"):
-        value = value[4:]
-    elif value.startswith("32"):
-        value = value[2:]
-
-    # Add 0
-    if value and not value.startswith("0"):
-        value = "0" + value
-
-    return value
-
-
-df["TELE"] = df["TELE"].apply(clean_tele)
+# Make sure TELE is treated as text
+df["TELE"] = df["TELE"].fillna("").astype(str).str.strip()
 
 # ==============================
-# OUTPUT
+# DEDUPLICATION
 # ==============================
-output_file = output_folder / "TELE_cleaned.xlsx"
 
-df.to_excel(output_file, index=False)
+# Keep empty TELE rows
+empty_tele = df[df["TELE"] == ""]
 
-print("✅ Cleaning finished!")
-print(f"📂 Input : {input_file}")
-print(f"📂 Output: {output_file}")
+# Deduplicate only non-empty TELE
+non_empty_tele = df[df["TELE"] != ""]
+
+non_empty_tele = non_empty_tele.drop_duplicates(
+    subset=["TELE"],
+    keep="first"
+)
+
+# Put everything back together
+df_final = pd.concat(
+    [non_empty_tele, empty_tele],
+    ignore_index=True
+)
+
+after = len(df_final)
+duplicates_removed = before - after
+
+# ==============================
+# SAVE
+# ==============================
+output_file = output_folder / "TELE_cleaned_deduplicated.xlsx"
+
+df_final.to_excel(output_file, index=False)
+
+# ==============================
+# RESULTS
+# ==============================
+print("================================")
+print("DEDUPLICATION FINISHED")
+print("================================")
+
+print(f"Rows before       : {before:,}")
+print(f"Rows after        : {after:,}")
+print(f"Duplicates removed: {duplicates_removed:,}")
+
+print(f"\n📁 Output:")
+print(output_file)
