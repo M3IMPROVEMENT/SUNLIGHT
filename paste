@@ -1,6 +1,7 @@
 from pathlib import Path
 from openpyxl import load_workbook, Workbook
 
+
 # ============================================================
 # SETTINGS
 # ============================================================
@@ -8,50 +9,99 @@ from openpyxl import load_workbook, Workbook
 INPUT_FOLDER = Path(r"C:\Users\YourName\Desktop\excel_files")
 OUTPUT_FOLDER = Path(r"C:\Users\YourName\Desktop\merged_output")
 
-# Maximum data rows per output file
 MAX_ROWS = 1_000_000
 
 OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
-# FIND ALL EXCEL FILES
+# FIND FILES
 # ============================================================
 
-files = sorted(
+files = sorted([
     f for f in INPUT_FOLDER.glob("*.xlsx")
     if not f.name.startswith("~$")
-)
+])
 
 print(f"Found {len(files)} files")
 
 
 # ============================================================
-# VARIABLES
+# CREATE OUTPUT FILE
+# ============================================================
+
+def create_output(number, header):
+
+    path = OUTPUT_FOLDER / f"merged_{number:03d}.xlsx"
+
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Sheet1")
+
+    # Header ONLY ONCE
+    ws.append(header)
+
+    return wb, ws, path
+
+
+# ============================================================
+# READ FIRST FILE HEADER
+# ============================================================
+
+wb = load_workbook(
+    files[0],
+    read_only=True,
+    data_only=False
+)
+
+ws = wb.worksheets[0]
+
+header = list(
+    next(
+        ws.iter_rows(
+            min_row=1,
+            max_row=1,
+            values_only=True
+        )
+    )
+)
+
+wb.close()
+
+
+# ============================================================
+# ADD SOURCE COLUMN
+# ============================================================
+
+header.append("source")
+
+
+print("\nOUTPUT HEADER:")
+print(header)
+
+
+# ============================================================
+# INITIALIZE
 # ============================================================
 
 output_number = 1
 output_rows = 0
 total_rows = 0
 
-
-# ============================================================
-# CREATE FIRST OUTPUT
-# ============================================================
-
-output_path = OUTPUT_FOLDER / f"merged_{output_number:03d}.xlsx"
-
-output_wb = Workbook(write_only=True)
-output_ws = output_wb.create_sheet("Sheet1")
+output_wb, output_ws, output_path = create_output(
+    output_number,
+    header
+)
 
 
 # ============================================================
-# MERGE
+# PROCESS FILES
 # ============================================================
 
-for i, file in enumerate(files, start=1):
+for file_number, file in enumerate(files, start=1):
 
-    print(f"[{i}/{len(files)}] {file.name}")
+    print(
+        f"\n[{file_number}/{len(files)}] {file.name}"
+    )
 
     try:
 
@@ -63,54 +113,80 @@ for i, file in enumerate(files, start=1):
 
         ws = wb.worksheets[0]
 
-        rows_in_file = 0
 
         # ====================================================
-        # COPY EVERYTHING
-        # INCLUDING HEADER
+        # SKIP ONLY THE HEADER ROW
         # ====================================================
 
-        for row in ws.iter_rows(values_only=True):
+        rows = ws.iter_rows(
+            min_row=2,
+            values_only=True
+        )
 
-            # ------------------------------------------------
-            # If output reaches limit, create another file
-            # ------------------------------------------------
+
+        file_rows = 0
+
+
+        # ====================================================
+        # COPY EVERY OTHER ROW
+        # ====================================================
+
+        for row in rows:
+
+            # -----------------------------------------------
+            # DO NOT CHANGE THE ROW
+            # -----------------------------------------------
+
+            new_row = list(row)
+
+            # -----------------------------------------------
+            # ADD SOURCE
+            # -----------------------------------------------
+
+            new_row.append(file.name)
+
+
+            # -----------------------------------------------
+            # NEW OUTPUT FILE IF LIMIT REACHED
+            # -----------------------------------------------
 
             if output_rows >= MAX_ROWS:
 
                 output_wb.save(output_path)
 
                 print(
-                    f"   Saved: {output_path.name} "
-                    f"({output_rows:,} rows)"
+                    f"   Saved: {output_path.name}"
                 )
 
                 output_number += 1
                 output_rows = 0
 
-                output_path = (
-                    OUTPUT_FOLDER /
-                    f"merged_{output_number:03d}.xlsx"
+                output_wb, output_ws, output_path = (
+                    create_output(
+                        output_number,
+                        header
+                    )
                 )
 
-                output_wb = Workbook(write_only=True)
-                output_ws = output_wb.create_sheet("Sheet1")
 
-            # ------------------------------------------------
-            # COPY ROW EXACTLY
-            # ------------------------------------------------
+            # -----------------------------------------------
+            # WRITE ROW
+            # -----------------------------------------------
 
-            output_ws.append(list(row))
+            output_ws.append(new_row)
 
             output_rows += 1
             total_rows += 1
-            rows_in_file += 1
+            file_rows += 1
+
 
         wb.close()
 
+
         print(
-            f"   Copied: {rows_in_file:,} rows"
+            f"   Rows copied: {file_rows:,}"
         )
+
 
     except Exception as e:
 
@@ -122,19 +198,35 @@ for i, file in enumerate(files, start=1):
 
 
 # ============================================================
-# SAVE LAST OUTPUT
+# SAVE LAST FILE
 # ============================================================
 
 output_wb.save(output_path)
 
-print()
-print("=" * 60)
+
+# ============================================================
+# FINAL RESULT
+# ============================================================
+
+print("\n")
+print("=" * 70)
 print("MERGE FINISHED")
-print("=" * 60)
+print("=" * 70)
 
-print(f"Files processed : {len(files):,}")
-print(f"Output files    : {output_number:,}")
-print(f"Total rows      : {total_rows:,}")
-print(f"Output folder   : {OUTPUT_FOLDER}")
+print(
+    f"Input files : {len(files):,}"
+)
 
-print("=" * 60)
+print(
+    f"Output files: {output_number:,}"
+)
+
+print(
+    f"Data rows   : {total_rows:,}"
+)
+
+print(
+    f"Output      : {OUTPUT_FOLDER}"
+)
+
+print("=" * 70)
