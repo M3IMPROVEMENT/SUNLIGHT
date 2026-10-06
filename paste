@@ -1,6 +1,6 @@
-
 from pathlib import Path
 from openpyxl import load_workbook, Workbook
+import csv
 
 # ============================================================
 # SETTINGS
@@ -23,11 +23,33 @@ files = sorted([
     if not f.name.startswith("~$")
 ])
 
-print(f"Found {len(files)} files")
+print("=" * 70)
+print(f"FOUND {len(files)} EXCEL FILES")
+print("=" * 70)
+
+
+if not files:
+    raise Exception("No Excel files found.")
 
 
 # ============================================================
-# GET HEADER FROM FIRST FILE
+# EXPECTED HEADER
+# ============================================================
+
+EXPECTED_HEADER = [
+    "name",
+    "address",
+    "postal_code",
+    "phone",
+    "website",
+    "review",
+    "total_review",
+    "url"
+]
+
+
+# ============================================================
+# READ HEADER FROM FIRST FILE
 # ============================================================
 
 wb = load_workbook(
@@ -38,21 +60,47 @@ wb = load_workbook(
 
 ws = wb.worksheets[0]
 
-# IMPORTANT: recalculate dimensions
-ws.reset_dimensions()
-
-header = next(ws.iter_rows(values_only=True))
-
-header = list(header)
+header = list(
+    next(
+        ws.iter_rows(
+            min_row=1,
+            max_row=1,
+            values_only=True
+        )
+    )
+)
 
 wb.close()
 
-print("\nHEADER:")
+
+print("\nHEADER FOUND:")
 print(header)
+
+print("\nEXPECTED HEADER:")
+print(EXPECTED_HEADER)
 
 
 # ============================================================
-# FUNCTION: CREATE OUTPUT
+# HEADER CHECK
+# ============================================================
+
+if header != EXPECTED_HEADER:
+
+    print("\n⚠️ WARNING: HEADER IS DIFFERENT!")
+
+    print("Found:")
+    print(header)
+
+    print("Expected:")
+    print(EXPECTED_HEADER)
+
+else:
+
+    print("\n✅ Header is correct.")
+
+
+# ============================================================
+# CREATE OUTPUT
 # ============================================================
 
 def create_output(number):
@@ -62,10 +110,12 @@ def create_output(number):
     wb = Workbook(write_only=True)
     ws = wb.create_sheet("Sheet1")
 
-    # Header
+    # Write header
     ws.append(header)
 
-    print(f"\n📁 Creating {path.name}")
+    print("\n" + "-" * 70)
+    print(f"CREATING {path.name}")
+    print("-" * 70)
 
     return wb, ws, path
 
@@ -75,10 +125,20 @@ def create_output(number):
 # ============================================================
 
 output_number = 1
+
 output_data_rows = 0
 total_data_rows = 0
 
-output_wb, output_ws, output_path = create_output(output_number)
+output_wb, output_ws, output_path = create_output(
+    output_number
+)
+
+
+# ============================================================
+# DIAGNOSTIC LOG
+# ============================================================
+
+log = []
 
 
 # ============================================================
@@ -87,11 +147,18 @@ output_wb, output_ws, output_path = create_output(output_number)
 
 for file_number, file in enumerate(files, start=1):
 
-    print(
-        f"\n[{file_number}/{len(files)}] {file.name}"
-    )
+    print("\n")
+    print("=" * 70)
+    print(f"[{file_number}/{len(files)}] {file.name}")
+    print("=" * 70)
+
+    file_rows_copied = 0
 
     try:
+
+        # ----------------------------------------------------
+        # OPEN FILE
+        # ----------------------------------------------------
 
         wb = load_workbook(
             file,
@@ -101,88 +168,343 @@ for file_number, file in enumerate(files, start=1):
 
         ws = wb.worksheets[0]
 
-        # ====================================================
-        # VERY IMPORTANT
-        # ====================================================
-        # Some Excel files have incorrect worksheet dimensions.
-        # This forces openpyxl to find the real used range.
-        # ====================================================
+        # ----------------------------------------------------
+        # GET EXCEL DIMENSIONS
+        # ----------------------------------------------------
 
-        ws.reset_dimensions()
+        max_row = ws.max_row
+        max_column = ws.max_column
 
-        file_rows = 0
+        expected_data_rows = max(
+            0,
+            max_row - 1
+        )
 
-        # Start at row 2 -> skip header
+        print(
+            f"Excel reports:"
+        )
+
+        print(
+            f"   Rows    : {max_row:,}"
+        )
+
+        print(
+            f"   Columns : {max_column}"
+        )
+
+        print(
+            f"Expected data rows: "
+            f"{expected_data_rows:,}"
+        )
+
+
+        # ----------------------------------------------------
+        # CHECK HEADER OF THIS FILE
+        # ----------------------------------------------------
+
+        current_header = list(
+            next(
+                ws.iter_rows(
+                    min_row=1,
+                    max_row=1,
+                    values_only=True
+                )
+            )
+        )
+
+        if current_header != header:
+
+            print(
+                "\n⚠️ HEADER DIFFERENT!"
+            )
+
+            print(
+                "This file:"
+            )
+
+            print(
+                current_header
+            )
+
+
+        # ----------------------------------------------------
+        # READ DATA
+        # ----------------------------------------------------
+
         for row in ws.iter_rows(
             min_row=2,
+            max_row=max_row,
             values_only=True
         ):
 
-            # ------------------------------------------------
-            # DO NOT DELETE ANY ROW
-            # ------------------------------------------------
-            # Even if only STE contains a value,
-            # the row is copied.
-            # ------------------------------------------------
+            # =================================================
+            # IMPORTANT:
+            # DO NOT FILTER ANY ROW
+            # =================================================
+
+            row = list(row)
+
+
+            # -------------------------------------------------
+            # Keep exactly 8 columns
+            # -------------------------------------------------
+
+            if len(row) < len(header):
+
+                row += [None] * (
+                    len(header) - len(row)
+                )
+
+            elif len(row) > len(header):
+
+                row = row[:len(header)]
+
+
+            # -------------------------------------------------
+            # CREATE NEW OUTPUT WHEN LIMIT REACHED
+            # -------------------------------------------------
 
             if output_data_rows >= MAX_DATA_ROWS:
 
                 output_wb.save(output_path)
 
                 print(
-                    f"   ✅ {output_path.name}: "
-                    f"{output_data_rows:,} rows"
+                    f"\n💾 Saved {output_path.name}"
+                )
+
+                print(
+                    f"   Rows: "
+                    f"{output_data_rows:,}"
                 )
 
                 output_number += 1
+
                 output_data_rows = 0
 
                 output_wb, output_ws, output_path = (
                     create_output(output_number)
                 )
 
-            output_ws.append(list(row))
+
+            # -------------------------------------------------
+            # COPY ROW
+            # -------------------------------------------------
+
+            output_ws.append(row)
 
             output_data_rows += 1
+
             total_data_rows += 1
-            file_rows += 1
+
+            file_rows_copied += 1
+
+
+        # ----------------------------------------------------
+        # CLOSE INPUT
+        # ----------------------------------------------------
 
         wb.close()
 
-        print(
-            f"   Rows copied: {file_rows:,}"
+
+        # ----------------------------------------------------
+        # COMPARE COUNTS
+        # ----------------------------------------------------
+
+        difference = (
+            file_rows_copied
+            -
+            expected_data_rows
         )
+
+
+        print(
+            f"\nRESULT:"
+        )
+
+        print(
+            f"   Expected : "
+            f"{expected_data_rows:,}"
+        )
+
+        print(
+            f"   Copied   : "
+            f"{file_rows_copied:,}"
+        )
+
+        print(
+            f"   Difference: "
+            f"{difference:,}"
+        )
+
+
+        # ----------------------------------------------------
+        # WARNING IF DIFFERENT
+        # ----------------------------------------------------
+
+        if difference != 0:
+
+            print(
+                "\n🚨🚨🚨 WARNING 🚨🚨🚨"
+            )
+
+            print(
+                f"{abs(difference):,} "
+                f"rows difference in this file!"
+            )
+
+
+        else:
+
+            print(
+                "   ✅ File copied completely"
+            )
+
+
+        # ----------------------------------------------------
+        # SAVE LOG
+        # ----------------------------------------------------
+
+        log.append({
+
+            "file": file.name,
+
+            "excel_max_row": max_row,
+
+            "expected_data_rows":
+                expected_data_rows,
+
+            "copied_rows":
+                file_rows_copied,
+
+            "difference":
+                difference
+
+        })
+
 
     except Exception as e:
 
-        print(f"❌ ERROR in {file.name}")
-        print(e)
+        print(
+            "\n❌ ERROR!"
+        )
+
+        print(
+            f"File: {file.name}"
+        )
+
+        print(
+            f"Error: {e}"
+        )
+
+
+        log.append({
+
+            "file": file.name,
+
+            "excel_max_row": "",
+
+            "expected_data_rows": "",
+
+            "copied_rows": "",
+
+            "difference": "ERROR"
+
+        })
 
 
 # ============================================================
-# SAVE LAST FILE
+# SAVE LAST OUTPUT
 # ============================================================
 
 output_wb.save(output_path)
 
 print(
-    f"\n✅ {output_path.name}: "
-    f"{output_data_rows:,} rows"
+    f"\n💾 Saved {output_path.name}"
+)
+
+print(
+    f"Rows: {output_data_rows:,}"
 )
 
 
 # ============================================================
-# FINAL RESULT
+# SAVE DIAGNOSTIC LOG
 # ============================================================
 
-print("\n" + "=" * 60)
-print("MERGE FINISHED")
-print("=" * 60)
+log_path = OUTPUT_FOLDER / "merge_diagnostic.csv"
 
-print(f"Input files       : {len(files):,}")
-print(f"Output files      : {output_number:,}")
-print(f"Total data rows   : {total_data_rows:,}")
-print(f"Expected manually : 88,233")
-print(f"Difference        : {88_233 - total_data_rows:,}")
+with open(
+    log_path,
+    "w",
+    newline="",
+    encoding="utf-8-sig"
+) as f:
 
-print("=" * 60)
+    writer = csv.DictWriter(
+        f,
+        fieldnames=[
+            "file",
+            "excel_max_row",
+            "expected_data_rows",
+            "copied_rows",
+            "difference"
+        ]
+    )
+
+    writer.writeheader()
+
+    writer.writerows(log)
+
+
+# ============================================================
+# FINAL TOTALS
+# ============================================================
+
+expected_total = sum(
+    int(x["expected_data_rows"])
+    for x in log
+    if str(x["expected_data_rows"]).isdigit()
+)
+
+copied_total = sum(
+    int(x["copied_rows"])
+    for x in log
+    if str(x["copied_rows"]).isdigit()
+)
+
+total_difference = (
+    copied_total - expected_total
+)
+
+
+print("\n")
+print("=" * 70)
+print("MERGE DIAGNOSTIC FINISHED")
+print("=" * 70)
+
+print(
+    f"Input files          : {len(files):,}"
+)
+
+print(
+    f"Expected data rows   : {expected_total:,}"
+)
+
+print(
+    f"Copied data rows     : {copied_total:,}"
+)
+
+print(
+    f"Difference           : {total_difference:,}"
+)
+
+print()
+print(
+    f"Diagnostic file:"
+)
+
+print(
+    log_path
+)
+
+print("=" * 70)
