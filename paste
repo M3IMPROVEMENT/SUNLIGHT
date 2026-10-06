@@ -6,14 +6,15 @@ from openpyxl import load_workbook, Workbook
 # CONFIGURATION
 # ============================================================
 
-# Folder containing your Excel files
-INPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB\excel_data-PC1_TR")
+INPUT_FOLDER = Path(
+    r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB\excel_data-PC1_TR"
+)
 
-# Folder where merged files will be saved
-OUTPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB\excel_data-PC1_TR\GSM\MERGED_OUTPUT")
+OUTPUT_FOLDER = Path(
+    r"C:\Users\Sunlight\Desktop\01-10-26\ALL DB\excel_data-PC1_TR\GSM\MERGED_OUTPUT"
+)
 
-# Maximum DATA rows per output file
-MAX_ROWS = 1_000_000
+MAX_DATA_ROWS = 1_000_000
 
 
 # ============================================================
@@ -24,24 +25,22 @@ OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
-# GET ALL EXCEL FILES
+# GET EXCEL FILES
 # ============================================================
 
 excel_files = sorted(
-    [
-        f for f in INPUT_FOLDER.iterdir()
-        if f.is_file()
-        and f.suffix.lower() == ".xlsx"
-        and not f.name.startswith("~$")
-    ]
+    f for f in INPUT_FOLDER.iterdir()
+    if f.is_file()
+    and f.suffix.lower() == ".xlsx"
+    and not f.name.startswith("~$")
+    and OUTPUT_FOLDER not in f.parents
 )
 
 
 print("=" * 70)
-print("EXCEL MERGE")
+print("EXACT EXCEL MERGE")
 print("=" * 70)
-
-print(f"Excel files found: {len(excel_files):,}")
+print(f"Files found: {len(excel_files):,}")
 print()
 
 
@@ -50,59 +49,57 @@ print()
 # ============================================================
 
 output_number = 0
-rows_in_output = 0
-total_rows = 0
+total_data_rows = 0
+rows_in_current_output = 0
 
 output_wb = None
 output_ws = None
 output_path = None
 
+header = None
+
 
 # ============================================================
-# CREATE NEW OUTPUT FILE
+# CREATE OUTPUT
 # ============================================================
 
-def create_output_file(headers):
+def create_output():
 
     global output_number
-    global rows_in_output
+    global rows_in_current_output
     global output_wb
     global output_ws
     global output_path
 
-    # Save previous file
+    # Save previous output
     if output_wb is not None:
 
         output_wb.save(output_path)
         output_wb.close()
 
         print(
-            f"   ✓ Saved: {output_path.name} "
-            f"({rows_in_output:,} rows)"
+            f"   ✓ Saved {output_path.name} "
+            f"→ {rows_in_current_output:,} data rows"
         )
 
-    # New output number
     output_number += 1
 
     output_path = (
-        OUTPUT_FOLDER
-        / f"merged_{output_number:03d}.xlsx"
+        OUTPUT_FOLDER /
+        f"merged_{output_number:03d}.xlsx"
     )
 
-    # Write-only workbook = much lower RAM usage
     output_wb = Workbook(write_only=True)
 
     output_ws = output_wb.create_sheet("Data")
 
-    # Write header
-    output_ws.append(headers)
+    # Header only once
+    output_ws.append(header)
 
-    rows_in_output = 0
+    rows_in_current_output = 0
 
     print()
-    print(
-        f"📁 Creating {output_path.name}"
-    )
+    print(f"📁 Creating: {output_path.name}")
 
 
 # ============================================================
@@ -119,84 +116,88 @@ for file_number, file_path in enumerate(
         f"{file_path.name}"
     )
 
+    file_rows = 0
+
     try:
 
-        # Open source Excel file
         wb = load_workbook(
-            file_path,
+            filename=file_path,
             read_only=True,
-            data_only=True
+            data_only=False
         )
 
         ws = wb.active
-
-        # ----------------------------------------------------
-        # GET HEADER FROM FIRST ROW
-        # ----------------------------------------------------
 
         rows = ws.iter_rows(
             values_only=True
         )
 
+        # ----------------------------------------------------
+        # READ HEADER
+        # ----------------------------------------------------
+
         try:
-            headers = next(rows)
+            file_header = next(rows)
 
         except StopIteration:
-            print("   ⚠ Empty file - skipped")
+            print("   ⚠ Empty worksheet")
             wb.close()
             continue
 
-        # ----------------------------------------------------
-        # FIRST FILE / FIRST OUTPUT
-        # ----------------------------------------------------
-
-        if output_wb is None:
-
-            create_output_file(headers)
 
         # ----------------------------------------------------
-        # READ DATA
+        # FIRST FILE
         # ----------------------------------------------------
 
-        file_rows = 0
+        if header is None:
+
+            header = file_header
+
+            create_output()
+
+
+        # ----------------------------------------------------
+        # MERGE ALL DATA ROWS
+        # ----------------------------------------------------
 
         for row in rows:
 
-            # If current output reached 1 million rows,
-            # create a new output file.
-            if rows_in_output >= MAX_ROWS:
+            # New output when limit reached
+            if rows_in_current_output >= MAX_DATA_ROWS:
 
-                create_output_file(headers)
+                create_output()
 
-            # Add row
+            # IMPORTANT:
+            # No filtering
+            # No deduplication
+            # No cleaning
+            # No empty-row removal
+
             output_ws.append(row)
 
-            rows_in_output += 1
-            total_rows += 1
+            rows_in_current_output += 1
+            total_data_rows += 1
             file_rows += 1
+
 
         wb.close()
 
         print(
-            f"   ✓ {file_rows:,} rows added"
+            f"   ✓ Added: {file_rows:,} rows"
         )
+
 
     except Exception as e:
 
         print()
-        print(
-            f"   ❌ ERROR: {file_path.name}"
-        )
-        print(
-            f"      {e}"
-        )
-        print(
-            "      Continuing with next file..."
-        )
+        print(f"   ❌ ERROR: {file_path.name}")
+        print(f"      {e}")
+        print("      Continuing...")
+        print()
 
 
 # ============================================================
-# SAVE LAST FILE
+# SAVE LAST OUTPUT
 # ============================================================
 
 if output_wb is not None:
@@ -206,13 +207,13 @@ if output_wb is not None:
 
     print()
     print(
-        f"   ✓ Saved: {output_path.name} "
-        f"({rows_in_output:,} rows)"
+        f"   ✓ Saved {output_path.name} "
+        f"→ {rows_in_current_output:,} data rows"
     )
 
 
 # ============================================================
-# FINAL SUMMARY
+# FINAL RESULT
 # ============================================================
 
 print()
@@ -220,27 +221,12 @@ print("=" * 70)
 print("MERGE FINISHED")
 print("=" * 70)
 
-print(
-    f"Input files:       {len(excel_files):,}"
-)
-
-print(
-    f"Total rows:        {total_rows:,}"
-)
-
-print(
-    f"Output files:      {output_number:,}"
-)
-
+print(f"Input files:       {len(excel_files):,}")
+print(f"Total DATA rows:   {total_data_rows:,}")
+print(f"Output files:      {output_number:,}")
 print()
-print(
-    f"Output folder:"
-)
-
-print(
-    OUTPUT_FOLDER
-)
-
+print(f"Output folder:")
+print(OUTPUT_FOLDER)
 print()
 print("=" * 70)
 print("DONE")
