@@ -1,59 +1,58 @@
 import pandas as pd
 from pathlib import Path
+import re
 
-# Folder containing your Excel files
-folder = Path(r"C:\Users\YOUR_NAME\Desktop\FILES")
+# ==============================
+# FILE
+# ==============================
+file = Path(r"C:\Users\YOUR_NAME\Desktop\your_file.xlsx")
 
-COLUMN = "VILLE"
+# ==============================
+# READ FILE
+# ==============================
+df = pd.read_excel(file, dtype=str)
 
-files_with_ville = []
+# ==============================
+# CLEAN TELE
+# ==============================
+def clean_tele(value):
 
-for file in folder.glob("*.xlsx"):
+    if pd.isna(value):
+        return ""
 
-    try:
-        df = pd.read_excel(file, dtype=str)
+    value = str(value).strip()
 
-        # Check if column exists
-        if COLUMN not in df.columns:
-            print(f"⚠️ {file.name} → VILLE column not found")
-            continue
+    if value == "":
+        return ""
 
-        # Find non-empty VILLE
-        ville = df[COLUMN].fillna("").astype(str).str.strip()
+    # Remove .0 coming from Excel
+    value = re.sub(r"\.0$", "", value)
 
-        non_empty = ville != ""
-        count = non_empty.sum()
+    # Keep only digits
+    value = re.sub(r"\D", "", value)
 
-        if count > 0:
-            files_with_ville.append({
-                "Fichier": file.name,
-                "Chemin": str(file),
-                "VILLE non vide": count
-            })
+    # Remove Belgian international prefixes
+    if value.startswith("0032"):
+        value = value[4:]
 
-            print(f"❌ {file.name} → {count} non-empty VILLE")
+    elif value.startswith("32"):
+        value = value[2:]
 
-        else:
-            print(f"✅ {file.name} → VILLE empty")
+    # Add 0 back for Belgian numbers
+    if value and not value.startswith("0"):
+        value = "0" + value
 
-    except Exception as e:
-        print(f"⚠️ Error with {file.name}: {e}")
+    return value
 
 
-# Save results
-if files_with_ville:
+df["TELE"] = df["TELE"].apply(clean_tele)
 
-    result = pd.DataFrame(files_with_ville)
+# ==============================
+# SAVE
+# ==============================
+output = file.parent / "TELE_cleaned.xlsx"
 
-    output = folder / "files_with_non_empty_VILLE.xlsx"
-    result.to_excel(output, index=False)
+df.to_excel(output, index=False)
 
-    print("\n================================")
-    print("FILES WITH NON-EMPTY VILLE")
-    print("================================")
-    print(result.to_string(index=False))
-
-    print(f"\n📁 Saved to: {output}")
-
-else:
-    print("\n✅ All files have an empty VILLE column.")
+print("✅ TELE cleaning finished.")
+print(f"📁 Saved: {output}")
