@@ -1,123 +1,28 @@
-import csv, re, random, time
-from urllib.parse import urljoin
-from playwright.sync_api import sync_playwright
-
-BASE = "https://be.kompass.com"
-KEYWORD = "software"      # change this: your search term
-MAX_PAGES = 3             # search result pages to go through
-GET_DETAILS = False       # start with False, switch to True once search works
-OUT = "kompass_belgium.csv"
-
-COMPANY_RE = re.compile(r"/c/[^/]+/[^/]+/?$")
-
-def pause(a=2.5, b=6):
-    time.sleep(random.uniform(a, b))
-
-def is_blocked(page):
-    html = page.content().lower()
-    return "captcha" in html or "datadome" in html or "geo.captcha-delivery" in html
-
-def collect_company_links(page):
-    links = {}
-    for a in page.query_selector_all("a[href*='/c/']"):
-        href = a.get_attribute("href") or ""
-        full = urljoin(BASE, href.split("?")[0])
-        if COMPANY_RE.search(full):
-            name = (a.inner_text() or "").strip()
-            if full not in links or (name and not links[full]):
-                links[full] = name
-    return links
-
-def get_details(page, url):
-    page.goto(url, wait_until="commit")
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=30000)
-    except Exception:
-        pass
-    page.wait_for_timeout(random.randint(1500, 3500))
-    d = {"phone": "", "website": "", "address": ""}
-
-    tel = page.query_selector("a[href^='tel:']")
-    if tel:
-        d["phone"] = tel.get_attribute("href").replace("tel:", "").strip()
-
-    for a in page.query_selector_all("a[target='_blank'][href^='http']"):
-        h = a.get_attribute("href") or ""
-        if "kompass.com" not in h and "b2bstars" not in h:
-            d["website"] = h
-            break
-
-    addr = page.query_selector("[itemprop='address'], address")
-    if addr:
-        d["address"] = " ".join(addr.inner_text().split())
-    return d
-
-def main():
-    results = {}
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir="./chrome_profile",   # keeps cookies between runs
-            channel="chrome",                   # your installed Google Chrome
-            headless=False,
-            locale="fr-BE",
-            viewport={"width": 1366, "height": 850},
-            args=["--disable-blink-features=AutomationControlled"],
-            # proxy={"server": "http://host:port", "username": "...", "password": "..."},
-        )
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-
-        # Warm-up: browse by hand first so DataDome trusts the session
-        page.goto(BASE, wait_until="commit")
-        input("Browse be.kompass.com by hand, accept cookies, solve any check, "
-              "then press Enter here...")
-
-        for n in range(1, MAX_PAGES + 1):
-            url = f"{BASE}/searchCompanies?text={KEYWORD}&page={n}"
-            print("Search page", n, url)
-            page.goto(url, wait_until="commit")
-
-            try:
-                page.wait_for_selector("a[href*='/c/']", timeout=30000)
-            except Exception:
-                if is_blocked(page):
-                    input("Verification detected - solve it in the browser, "
-                          "then press Enter...")
-                    page.reload(wait_until="commit")
-                    try:
-                        page.wait_for_selector("a[href*='/c/']", timeout=30000)
-                    except Exception:
-                        pass
-
-            found = collect_company_links(page)
-            print("  found", len(found), "companies")
-            if not found:
-                print("  nothing found - check the URL pattern in your browser")
-                break
-            results.update(found)
-            pause()
-
-        rows = []
-        for i, (url, name) in enumerate(results.items(), 1):
-            row = {"name": name, "url": url, "phone": "", "website": "", "address": ""}
-            if GET_DETAILS:
-                try:
-                    row.update(get_details(page, url))
-                except Exception as e:
-                    print("  error on", url, e)
-                print(f"  [{i}/{len(results)}] {name}")
-                pause()
-            rows.append(row)
-
-        ctx.close()
-
-    with open(OUT, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=["name", "url", "phone", "website", "address"])
-        w.writeheader()
-        w.writerows(rows)
-    print("Saved", len(rows), "rows to", OUT)
-
-if __name__ == "__main__":
+PS C:\Users\Sunlight-call\Desktop\kompass> PYTHON Kompass-be.py
+Browse be.kompass.com by hand, accept cookies, solve any check, then press Enter here...
+Search page 1 https://be.kompass.com/searchCompanies?text=software&page=1
+Traceback (most recent call last):
+  File "C:\Users\Sunlight-call\Desktop\kompass\Kompass-be.py", line 123, in <module>
     main()
+  File "C:\Users\Sunlight-call\Desktop\kompass\Kompass-be.py", line 80, in main
+    page.goto(url, wait_until="commit")
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\sync_api\_generated.py", line 9903, in goto
+    self._sync(
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_page.py", line 562, in goto
+    return await self._main_frame.goto(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_frame.py", line 157, in goto
+    await self._channel.send(
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_connection.py", line 76, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_connection.py", line 632, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.Error: Page.goto: Navigation to "https://be.kompass.com/searchCompanies?text=software&page=1" is interrupted by another navigation to "https://be.kompass.com/fr"
+Call log:
+  - navigating to "https://be.kompass.com/searchCompanies?text=software&page=1", waiting until "commit"
+
+PS C:\Users\Sunlight-call\Desktop\kompass> 
