@@ -1,115 +1,33 @@
-import csv, re, random, time
-from urllib.parse import urljoin
-from playwright.sync_api import sync_playwright
+PYTHON Kompass-be.py
 
-BASE = "https://be.kompass.com"
-GET_DETAILS = False       # start with False, switch to True once it works
-OUT = "kompass_belgium.csv"
+1) In the Chrome window: accept cookies, solve any check.
+2) Search for companies yourself (keyword, Belgium, etc.)
+3) Leave the RESULTS page open.
 
-COMPANY_RE = re.compile(r"/c/[^/]+/[^/]+/?$")
-
-def pause(a=2.5, b=6):
-    time.sleep(random.uniform(a, b))
-
-def collect_company_links(page):
-    links = {}
-    for a in page.query_selector_all("a[href*='/c/']"):
-        href = a.get_attribute("href") or ""
-        full = urljoin(page.url, href.split("?")[0])
-        if COMPANY_RE.search(full):
-            name = (a.inner_text() or "").strip()
-            if full not in links or (name and not links[full]):
-                links[full] = name
-    return links
-
-def safe_goto(page, url):
-    try:
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-    except Exception as e:
-        # redirects (like /fr) can interrupt navigation; just wait and continue
-        print("  navigation note:", str(e).splitlines()[0])
-        page.wait_for_timeout(4000)
-
-def get_details(page, url):
-    safe_goto(page, url)
-    page.wait_for_timeout(random.randint(1500, 3500))
-    d = {"phone": "", "website": "", "address": ""}
-
-    tel = page.query_selector("a[href^='tel:']")
-    if tel:
-        d["phone"] = tel.get_attribute("href").replace("tel:", "").strip()
-
-    for a in page.query_selector_all("a[target='_blank'][href^='http']"):
-        h = a.get_attribute("href") or ""
-        if "kompass.com" not in h and "b2bstars" not in h:
-            d["website"] = h
-            break
-
-    addr = page.query_selector("[itemprop='address'], address")
-    if addr:
-        d["address"] = " ".join(addr.inner_text().split())
-    return d
-
-def main():
-    results = {}
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir="./chrome_profile",
-            channel="chrome",
-            headless=False,
-            locale="fr-BE",
-            viewport={"width": 1366, "height": 850},
-            args=["--disable-blink-features=AutomationControlled"],
-            # proxy={"server": "http://host:port", "username": "...", "password": "..."},
-        )
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-
-        safe_goto(page, BASE + "/fr")
-        print("\n1) In the Chrome window: accept cookies, solve any check.")
-        print("2) Search for companies yourself (keyword, Belgium, etc.)")
-        print("3) Leave the RESULTS page open.\n")
-
-        page_no = 1
-        while True:
-            input(f"Results page {page_no} is open? Press Enter to scrape it...")
-            found = collect_company_links(page)
-            new = {u: n for u, n in found.items() if u not in results}
-            results.update(new)
-            print(f"  found {len(found)} links, {len(new)} new, total {len(results)}")
-            if not found:
-                print("  No company links on this page. Make sure you're on a results list.")
-            again = input("Go to the NEXT results page in the browser, then press Enter "
-                          "to scrape it (or type q + Enter to finish): ").strip().lower()
-            if again == "q":
-                break
-            found = collect_company_links(page)
-            new = {u: n for u, n in found.items() if u not in results}
-            results.update(new)
-            page_no += 1
-            print(f"  page {page_no}: {len(found)} links, {len(new)} new, total {len(results)}")
-
-        rows = []
-        for i, (url, name) in enumerate(results.items(), 1):
-            row = {"name": name, "url": url, "phone": "", "website": "", "address": ""}
-            if GET_DETAILS:
-                try:
-                    row.update(get_details(page, url))
-                except Exception as e:
-                    print("  error on", url, e)
-                print(f"  [{i}/{len(results)}] {name}")
-                pause()
-            rows.append(row)
-
-        ctx.close()
-
-    with open(OUT, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=["name", "url", "phone", "website", "address"])
-        w.writeheader()
-        w.writerows(rows)
-    print("Saved", len(rows), "rows to", OUT)
-
-if __name__ == "__main__":
+Results page 1 is open? Press Enter to scrape it...
+Traceback (most recent call last):
+  File "C:\Users\Sunlight-call\Desktop\kompass\Kompass-be.py", line 115, in <module>
     main()
+  File "C:\Users\Sunlight-call\Desktop\kompass\Kompass-be.py", line 78, in main
+    found = collect_company_links(page)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sunlight-call\Desktop\kompass\Kompass-be.py", line 16, in collect_company_links
+    for a in page.query_selector_all("a[href*='/c/']"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\sync_api\_generated.py", line 8990, in query_selector_all
+    self._sync(self._impl_obj.query_selector_all(selector=selector))
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_page.py", line 420, in query_selector_all
+    return await self._main_frame.query_selector_all(selector)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_frame.py", line 381, in query_selector_all
+    await self._channel.send(
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_connection.py", line 76, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sunlight-call\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_connection.py", line 632, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.Error: Page.query_selector_all: Execution context was destroyed, most likely because of a navigation
+PS C:\Users\Sunlight-call\Desktop\kompass> 
