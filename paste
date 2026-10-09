@@ -1,17 +1,85 @@
-Traceback (most recent call last):
-  File "C:\Users\Sunlight\Desktop\01-10-26\#NET\CLEAN_PHONE\script.py", line 15, in <module>
-    df = pd.read_excel(input_file, dtype=str)
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Sunlight\AppData\Local\Programs\Python\Python311\Lib\site-packages\pandas\io\excel\_base.py", line 495, in read_excel
-    io = ExcelFile(
-         ^^^^^^^^^^
-  File "C:\Users\Sunlight\AppData\Local\Programs\Python\Python311\Lib\site-packages\pandas\io\excel\_base.py", line 1550, in __init__
-    ext = inspect_excel_format(
-          ^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Sunlight\AppData\Local\Programs\Python\Python311\Lib\site-packages\pandas\io\excel\_base.py", line 1402, in inspect_excel_format
-    with get_handle(
-         ^^^^^^^^^^^
-  File "C:\Users\Sunlight\AppData\Local\Programs\Python\Python311\Lib\site-packages\pandas\io\common.py", line 882, in get_handle
-    handle = open(handle, ioargs.mode)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^
-PermissionError: [Errno 13] Permission denied: 'C:\\Users\\Sunlight\\Desktop\\01-10-26\\#NET'
+
+import pandas as pd
+from pathlib import Path
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+input_file = Path(r"C:\Users\Sunlight\Desktop\01-10-26\#NET")
+output_file = Path(r"C:\Users\Sunlight\Desktop\01-10-26\#NET\CLEAN_PHONE\MERGE-TELE")
+
+# ============================================================
+# READ FILE
+# ============================================================
+
+df = pd.read_excel(input_file, dtype=str)
+
+# Keep the original data exactly as it is
+df = df.fillna("")
+
+# Phone columns
+phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
+
+# Make sure the columns exist
+for col in phone_columns:
+    if col not in df.columns:
+        df[col] = ""
+
+# ============================================================
+# CREATE ONE ROW PER PHONE
+# ============================================================
+
+rows = []
+
+for _, row in df.iterrows():
+
+    phones_found = False
+
+    for col in phone_columns:
+
+        phone = str(row[col]).strip()
+
+        if phone != "":
+            phones_found = True
+
+            new_row = row.copy()
+
+            # Put the phone in TELE
+            new_row["TELE"] = phone
+
+            rows.append(new_row)
+
+    # If the original row has NO phone at all,
+    # keep the row with TELE empty
+    if not phones_found:
+        new_row = row.copy()
+        new_row["TELE"] = ""
+        rows.append(new_row)
+
+# ============================================================
+# CREATE FINAL DATAFRAME
+# ============================================================
+
+result = pd.DataFrame(rows)
+
+# ============================================================
+# REMOVE ORIGINAL PHONE COLUMNS
+# ============================================================
+
+result = result.drop(columns=phone_columns)
+
+# Put TELE where you want it
+# Here it will be at the end.
+# If you want it somewhere specific, we can move it.
+
+# ============================================================
+# SAVE
+# ============================================================
+
+result.to_excel(output_file, index=False)
+
+print("DONE")
+print(f"Original rows : {len(df):,}")
+print(f"Final rows    : {len(result):,}")
+print(f"Output        : {output_file}")
