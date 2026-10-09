@@ -1,1 +1,92 @@
-https://www.kaggle.com/code/subhaskumarray/scraping-github-topics-with-their-repositories
+import csv, re, random, time
+from urllib.parse import urljoin
+from playwright.sync_api import sync_playwright
+
+BASE = "https://be.kompass.com"
+KEYWORD = "software"      # change this: your search term
+MAX_PAGES = 3             # search result pages to go through
+GET_DETAILS = True        # visit each company page for phone/website
+OUT = "kompass_belgium.csv"
+
+COMPANY_RE = re.compile(r"/c/[^/]+/[^/]+/?$")
+
+def pause(a=2.5, b=6):
+    time.sleep(random.uniform(a, b))
+
+def collect_company_links(page):
+    links = {}
+    for a in page.query_selector_all("a[href*='/c/']"):
+        href = a.get_attribute("href") or ""
+        full = urljoin(BASE, href.split("?")[0])
+        if COMPANY_RE.search(full):
+            name = (a.inner_text() or "").strip()
+            if full not in links or (name and not links[full]):
+                links[full] = name
+    return links
+
+def get_details(page, url):
+    page.goto(url, wait_until="domcontentloaded")
+    page.wait_for_timeout(random.randint(1500, 3500))
+    d = {"phone": "", "website": "", "address": ""}
+
+    tel = page.query_selector("a[href^='tel:']")
+    if tel:
+        d["phone"] = tel.get_attribute("href").replace("tel:", "").strip()
+
+    for a in page.query_selector_all("a[target='_blank'][href^='http']"):
+        h = a.get_attribute("href") or ""
+        if "kompass.com" not in h and "b2bstars" not in h:
+            d["website"] = h
+            break
+
+    addr = page.query_selector("[itemprop='address'], address")
+    if addr:
+        d["address"] = " ".join(addr.inner_text().split())
+    return d
+
+def main():
+    results = {}
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)  # keep visible: fewer blocks
+        ctx = browser.new_context(locale="fr-BE")
+        page = ctx.new_page()
+
+        for n in range(1, MAX_PAGES + 1):
+            url = f"{BASE}/searchCompanies?text={KEYWORD}&page={n}"
+            print("Search page", n, url)
+            page.goto(url, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+
+            # If a captcha / DataDome check appears, solve it by hand, then press Enter
+            if "captcha" in page.content().lower() or "datadome" in page.url.lower():
+                input("Verification detected - solve it in the browser, then press Enter...")
+
+            found = collect_company_links(page)
+            print("  found", len(found), "companies")
+            if not found:
+                break
+            results.update(found)
+            pause()
+
+        rows = []
+        for i, (url, name) in enumerate(results.items(), 1):
+            row = {"name": name, "url": url, "phone": "", "website": "", "address": ""}
+            if GET_DETAILS:
+                try:
+                    row.update(get_details(page, url))
+                except Exception as e:
+                    print("  error on", url, e)
+                print(f"  [{i}/{len(results)}] {name}")
+                pause()
+            rows.append(row)
+
+        browser.close()
+
+    with open(OUT, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=["name", "url", "phone", "website", "address"])
+        w.writeheader()
+        w.writerows(rows)
+    print("Saved", len(rows), "rows to", OUT)
+
+if __name__ == "__main__":
+    main()
