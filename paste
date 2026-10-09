@@ -1,127 +1,123 @@
-import pandas as pd
-from pathlib import Path
+import csv, re, random, time
+from urllib.parse import urljoin
+from playwright.sync_api import sync_playwright
 
-# ============================================================
-# CONFIG
-# ============================================================
+BASE = "https://be.kompass.com"
+KEYWORD = "software"      # change this: your search term
+MAX_PAGES = 3             # search result pages to go through
+GET_DETAILS = False       # start with False, switch to True once search works
+OUT = "kompass_belgium.csv"
 
-input_folder = Path(
-    r"C:\Users\Sunlight\Desktop\01-10-26\#NET"
-)
+COMPANY_RE = re.compile(r"/c/[^/]+/[^/]+/?$")
 
-output_folder = Path(
-    r"C:\Users\Sunlight\Desktop\01-10-26\#NET\CLEAN_PHONE\MERGE-TELE"
-)
+def pause(a=2.5, b=6):
+    time.sleep(random.uniform(a, b))
 
-output_folder.mkdir(parents=True, exist_ok=True)
+def is_blocked(page):
+    html = page.content().lower()
+    return "captcha" in html or "datadome" in html or "geo.captcha-delivery" in html
 
-PHONE_COLS = ["GSM", "TEL1", "TEL2", "TEL3"]
+def collect_company_links(page):
+    links = {}
+    for a in page.query_selector_all("a[href*='/c/']"):
+        href = a.get_attribute("href") or ""
+        full = urljoin(BASE, href.split("?")[0])
+        if COMPANY_RE.search(full):
+            name = (a.inner_text() or "").strip()
+            if full not in links or (name and not links[full]):
+                links[full] = name
+    return links
 
-# Find Excel files directly inside the input folder
-files = [
-    f for f in input_folder.glob("*.xlsx")
-    if not f.name.startswith("~$")
-    and f.parent != output_folder
-]
-
-print(f"Files found: {len(files)}")
-
-total_before = 0
-total_after = 0
-errors = []
-
-# ============================================================
-# PROCESS FILES
-# ============================================================
-
-for file in files:
+def get_details(page, url):
+    page.goto(url, wait_until="commit")
     try:
-        print(f"\nProcessing: {file.name}")
+        page.wait_for_load_state("domcontentloaded", timeout=30000)
+    except Exception:
+        pass
+    page.wait_for_timeout(random.randint(1500, 3500))
+    d = {"phone": "", "website": "", "address": ""}
 
-        # Read data
-        df = pd.read_excel(file, dtype=str).fillna("")
-        total_before += len(df)
+    tel = page.query_selector("a[href^='tel:']")
+    if tel:
+        d["phone"] = tel.get_attribute("href").replace("tel:", "").strip()
 
-        # Ensure phone columns exist
-        for col in PHONE_COLS:
-            if col not in df.columns:
-                df[col] = ""
+    for a in page.query_selector_all("a[target='_blank'][href^='http']"):
+        h = a.get_attribute("href") or ""
+        if "kompass.com" not in h and "b2bstars" not in h:
+            d["website"] = h
+            break
 
-        # Identify original rows with no phone numbers
-        has_phone = (
-            df[PHONE_COLS]
-            .apply(lambda col: col.str.strip().ne(""))
-            .any(axis=1)
+    addr = page.query_selector("[itemprop='address'], address")
+    if addr:
+        d["address"] = " ".join(addr.inner_text().split())
+    return d
+
+def main():
+    results = {}
+    with sync_playwright() as p:
+        ctx = p.chromium.launch_persistent_context(
+            user_data_dir="./chrome_profile",   # keeps cookies between runs
+            channel="chrome",                   # your installed Google Chrome
+            headless=False,
+            locale="fr-BE",
+            viewport={"width": 1366, "height": 850},
+            args=["--disable-blink-features=AutomationControlled"],
+            # proxy={"server": "http://host:port", "username": "...", "password": "..."},
+        )
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
 
-        # Rows with no phone: preserve once with TELE empty
-        no_phone = df.loc[~has_phone].copy()
-        no_phone["TELE"] = ""
+        # Warm-up: browse by hand first so DataDome trusts the session
+        page.goto(BASE, wait_until="commit")
+        input("Browse be.kompass.com by hand, accept cookies, solve any check, "
+              "then press Enter here...")
 
-        # Rows with phones: reshape into one row per phone
-        with_phone = df.loc[has_phone].copy()
-        with_phone["_ROW_ID"] = with_phone.index
+        for n in range(1, MAX_PAGES + 1):
+            url = f"{BASE}/searchCompanies?text={KEYWORD}&page={n}"
+            print("Search page", n, url)
+            page.goto(url, wait_until="commit")
 
-        result = with_phone.melt(
-            id_vars=["_ROW_ID"],
-            value_vars=PHONE_COLS,
-            var_name="_PHONE_SOURCE",
-            value_name="TELE"
-        )
+            try:
+                page.wait_for_selector("a[href*='/c/']", timeout=30000)
+            except Exception:
+                if is_blocked(page):
+                    input("Verification detected - solve it in the browser, "
+                          "then press Enter...")
+                    page.reload(wait_until="commit")
+                    try:
+                        page.wait_for_selector("a[href*='/c/']", timeout=30000)
+                    except Exception:
+                        pass
 
-        # Remove empty phone values
-        result["TELE"] = result["TELE"].str.strip()
-        result = result[result["TELE"].ne("")]
+            found = collect_company_links(page)
+            print("  found", len(found), "companies")
+            if not found:
+                print("  nothing found - check the URL pattern in your browser")
+                break
+            results.update(found)
+            pause()
 
-        # Restore the other original columns
-        original_columns = [
-            col for col in df.columns
-            if col not in PHONE_COLS
-        ]
+        rows = []
+        for i, (url, name) in enumerate(results.items(), 1):
+            row = {"name": name, "url": url, "phone": "", "website": "", "address": ""}
+            if GET_DETAILS:
+                try:
+                    row.update(get_details(page, url))
+                except Exception as e:
+                    print("  error on", url, e)
+                print(f"  [{i}/{len(results)}] {name}")
+                pause()
+            rows.append(row)
 
-        result = result.merge(
-            with_phone[["_ROW_ID"] + original_columns],
-            on="_ROW_ID",
-            how="left",
-            sort=False
-        )
+        ctx.close()
 
-        # Combine rows with and without phones
-        result = pd.concat(
-            [result[original_columns + ["TELE"]],
-             no_phone[original_columns + ["TELE"]]],
-            ignore_index=True
-        )
+    with open(OUT, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=["name", "url", "phone", "website", "address"])
+        w.writeheader()
+        w.writerows(rows)
+    print("Saved", len(rows), "rows to", OUT)
 
-        # Save output
-        output_file = output_folder / f"{file.stem}_TELE.xlsx"
-
-        result.to_excel(
-            output_file,
-            index=False,
-            engine="xlsxwriter"
-        )
-
-        total_after += len(result)
-
-        print(f"Rows before: {len(df):,}")
-        print(f"Rows after:  {len(result):,}")
-        print("Saved successfully.")
-
-    except Exception as e:
-        errors.append((file.name, str(e)))
-        print(f"ERROR: {file.name}: {e}")
-
-# ============================================================
-# SUMMARY
-# ============================================================
-
-print("\n========== FINISHED ==========")
-print(f"Files processed: {len(files) - len(errors)}")
-print(f"Files with errors: {len(errors)}")
-print(f"Rows before: {total_before:,}")
-print(f"Rows after: {total_after:,}")
-print(f"Output folder: {output_folder}")
-
-for filename, error in errors:
-    print(f"\nFAILED: {filename}\n{error}")
+if __name__ == "__main__":
+    main()
