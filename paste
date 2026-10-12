@@ -1,398 +1,256 @@
-import csv, re, json, random, time, os
-from urllib.parse import urljoin
-from playwright.sync_api import sync_playwright
+"""
+Kompass Belgique scraper : nom, TVA, téléphone, code postal, adresse.
 
-# Search once by hand in Chrome, then paste the RESULTS page URL here:
-START_URL = ""            # e.g. "https://be.kompass.com/..."
-MAX_PAGES = 50            # result pages to scrape
-GET_DETAILS = True        # open each company page for phone/email/website
-MAX_COMPANIES = None      # None = all; set a number to limit a run
-OUT = "kompass_belgium.csv"
+Installation :
+    pip install playwright
+    playwright install chromium
 
-BASE = "https://be.kompass.com"
-FIELDS = ["name", "url", "phone", "email", "website", "address", "done"]
+Utilisation :
+    1) Mets une ou plusieurs URLs de listing Kompass dans LISTING_URLS
+       (page de résultats / catégorie), OU mets des URLs de fiches
+       (une par ligne) dans le fichier urls.txt.
+    2) python kompass_scraper.py
+    Résultat : kompass_be.csv (reprise automatique si tu relances).
+"""
+import csv
+import json
+import os
+import random
+import re
+import time
 
-COMPANY_RE = re.compile(r"/c/[^/]+/[^/]+/?$")
-PHONE_RE = re.compile(r"(?:\+|00)?\d[\d\s./()-]{6,16}\d")
-LABEL_RE = re.compile(r"(t[ée]l[ée]phone|\bt[ée]l\b|\btel\b|phone|mobile|gsm)", re.I)
-EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-REVEAL_RE = re.compile(
-    r"(afficher|voir|montrer|show|display|reveal).{0,25}(t[ée]l|phone|num[ée]ro|number|contact|e-?mail)"
-    r"|^\s*(t[ée]l[ée]phone|phone)\s*$", re.I)
-SKIP_SITES = ("kompass.com", "b2bstars", "svaplus", "facebook.", "linkedin.",
-              "twitter.", "instagram.", "youtube.", "google.", "cookiebot",
-              "onetrust", "doubleclick", "gstatic", "w3.org", "schema.org")
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-COOKIE_SELECTORS = [
-    "#onetrust-accept-btn-handler",
-    "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
-    "button:has-text('Tout accepter')", "button:has-text('Accepter')",
-    "button:has-text('Accept all')", "button:has-text('Accept')",
+# ----------------------------- CONFIG ---------------------------------
+LISTING_URLS = [
+    # "https://be.kompass.com/....",   # <- colle ici tes URLs de listing
 ]
-NEXT_SELECTORS = [
-    "a[rel='next']", "li.next a", "a.next", "a.pagination-next", "button.next",
-    "a[aria-label*='suivant' i]", "button[aria-label*='suivant' i]",
-    "a[aria-label*='next' i]", "button[aria-label*='next' i]",
-    "a:has-text('Suivant')", "button:has-text('Suivant')",
-    "a:has-text('Next')", "button:has-text('Next')",
-    "a:has-text('›')", "a:has-text('»')",
-]
+URLS_FILE = "urls.txt"          # optionnel : une URL de fiche par ligne
+OUTPUT_CSV = "kompass_be.csv"
+MAX_PAGES_PER_LISTING = 50
+HEADLESS = False                # False = moins de blocages anti-bot
+DELAY = (1.5, 3.5)              # pause aléatoire entre deux fiches (s)
+RETRIES = 3
+# -----------------------------------------------------------------------
 
-def pause(a=3, b=7):
-    time.sleep(random.uniform(a, b))
+COMPANY_LINK_RE = re.compile(r"^https?://be\.kompass\.com/c/[^/]+/[a-z]{2}\d+/?$", re.I)
+VAT_RE = re.compile(r"\bBE[\s.]?(0?\d{3})[\s.]?(\d{3})[\s.]?(\d{3})\b", re.I)
+PHONE_RE = re.compile(r"(?:\+32|0032|0)[\s./-]?\d(?:[\s./-]?\d){7,8}")
+ADDR_RE = re.compile(r"([^\n,]*\d+[^\n,]*)[,\n\s]+(\d{4})\s+([A-Za-zÀ-ÿ'’\- ]+)")
+FIELDS = ["name", "tva", "phone", "postal", "address", "city", "url"]
 
-def active_page(ctx):
-    return [pg for pg in ctx.pages if not pg.is_closed()][-1]
 
-# ---------- phone handling ----------
+# ------------------------------ UTILS ----------------------------------
+def pause():
+    time.sleep(random.uniform(*DELAY))
 
-def normalize_be_phone(raw):
-    """Return +32XXXXXXXX for a valid Belgian phone, else ''.
-    Kompass often shows numbers WITHOUT the leading 0 (e.g. '494 66 56 84')."""
-    digits = re.sub(r"\D", "", raw or "")
-    if digits.startswith("0032"):
-        national = digits[4:]
-    elif digits.startswith("32") and len(digits) in (10, 11):
-        national = digits[2:]
-    elif digits.startswith("0"):
-        national = digits[1:]
-    else:
-        national = digits
-    if national.startswith("4") and len(national) == 9:        # mobile
-        return "+32" + national
-    if national and national[0] in "123456789" and not national.startswith("4") and len(national) == 8:
-        return "+32" + national                                  # landline
-    return ""
 
-def phone_from_text(body):
-    lines = [l.strip() for l in body.splitlines() if l.strip()]
-    for i, line in enumerate(lines):
-        low = line.lower()
-        if LABEL_RE.search(line) and "fax" not in low:
-            chunk = " ".join(lines[i:i + 3])
-            for m in PHONE_RE.finditer(chunk):
-                p = normalize_be_phone(m.group(0))
-                if p:
-                    return p
-    return ""
+def valid_be_vat(d: str) -> bool:
+    return len(d) == 10 and d.isdigit() and 97 - int(d[:8]) % 97 == int(d[8:])
 
-# ---------- captcha / cookies / navigation ----------
 
-def is_blocked(page):
-    try:
-        if "captcha-delivery" in page.url:
+def safe_goto(page, url: str) -> bool:
+    for attempt in range(1, RETRIES + 1):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_load_state("networkidle", timeout=15000)
             return True
-        return page.query_selector("iframe[src*='captcha-delivery']") is not None
-    except Exception:
-        return False
-
-def wait_if_blocked(page, max_wait=900):
-    if not is_blocked(page):
-        return
-    print("  Verification check detected - solve it in the browser, I'll continue automatically...")
-    waited = 0
-    while is_blocked(page) and waited < max_wait:
-        time.sleep(3)
-        waited += 3
-    page.wait_for_timeout(2000)
-
-def accept_cookies(page):
-    for sel in COOKIE_SELECTORS:
-        try:
-            el = page.query_selector(sel)
-            if el and el.is_visible():
-                el.click(timeout=2000)
-                page.wait_for_timeout(1000)
-                return
-        except Exception:
-            continue
-
-def safe_goto(page, url):
-    try:
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-    except Exception as e:
-        print("  navigation note:", str(e).splitlines()[0])
-        page.wait_for_timeout(3000)
-    wait_if_blocked(page)
-    accept_cookies(page)
-
-# ---------- results pages ----------
-
-def collect_company_links(ctx, tries=4):
-    for attempt in range(tries):
-        page = active_page(ctx)
-        wait_if_blocked(page)
-        try:
-            page.wait_for_selector("a[href*='/c/']", timeout=30000)
-        except Exception:
-            pass
-        page.wait_for_timeout(1500)
-        try:
-            links = {}
-            anchors = page.eval_on_selector_all(
-                "a[href*='/c/']",
-                "els => els.map(e => [e.getAttribute('href'), e.innerText])")
-            for href, text in anchors:
-                full = urljoin(page.url, (href or "").split("?")[0])
-                if COMPANY_RE.search(full):
-                    name = (text or "").strip()
-                    if full not in links or (name and not links[full]):
-                        links[full] = name
-            return links
-        except Exception:
-            print(f"  page was navigating, retry {attempt + 1}/{tries}...")
-            time.sleep(3)
-    return {}
-
-def is_disabled(el):
-    try:
-        cls = (el.get_attribute("class") or "").lower()
-        pcls = (el.evaluate("e => e.parentElement ? e.parentElement.className : ''") or "").lower()
-        aria = (el.get_attribute("aria-disabled") or "").lower()
-        return "disabled" in cls or "disabled" in pcls or aria == "true" or el.is_disabled()
-    except Exception:
-        return False
-
-def find_next(page, current_no):
-    for sel in NEXT_SELECTORS:
-        try:
-            for el in page.query_selector_all(sel):
-                if el.is_visible() and not is_disabled(el):
-                    return el
-        except Exception:
-            continue
-    target = str(current_no + 1)
-    for c in ["nav[aria-label*='pagination' i]", "ul.pagination", ".pagination", "[class*='paginat']"]:
-        try:
-            for el in page.query_selector_all(f"{c} a, {c} button"):
-                if el.is_visible() and (el.inner_text() or "").strip() == target:
-                    return el
-        except Exception:
-            continue
-    return None
-
-def go_next(ctx, current_no, before_links):
-    page = active_page(ctx)
-    btn = find_next(page, current_no)
-    if not btn:
-        return False
-    try:
-        btn.scroll_into_view_if_needed()
-        page.wait_for_timeout(random.randint(500, 1500))
-        btn.click()
-    except Exception as e:
-        print("  click failed:", str(e).splitlines()[0])
-        return False
-    for _ in range(20):
-        time.sleep(2)
-        now = set(collect_company_links(ctx, tries=1).keys())
-        if now and now != set(before_links):
-            return True
+        except PWTimeout:
+            return True  # la page est là, networkidle n'a juste pas abouti
+        except Exception as e:
+            print(f"   goto retry {attempt}/{RETRIES}: {str(e)[:80]}")
+            time.sleep(2 * attempt)
     return False
 
-# ---------- company detail page ----------
 
-def jsonld_data(page):
-    out = {}
-    try:
-        blocks = page.eval_on_selector_all(
-            "script[type='application/ld+json']", "els => els.map(e => e.textContent)")
-    except Exception:
-        return out
-
-    def walk(o):
-        if isinstance(o, list):
-            for x in o:
-                walk(x)
-        elif isinstance(o, dict):
-            if o.get("telephone") and "phone" not in out:
-                out["phone"] = str(o["telephone"])
-            if o.get("email") and "email" not in out:
-                out["email"] = str(o["email"])
-            u = str(o.get("url") or "")
-            if u.startswith("http") and not any(s in u for s in SKIP_SITES) and "website" not in out:
-                out["website"] = u
-            a = o.get("address")
-            if isinstance(a, dict) and "address" not in out:
-                out["address"] = ", ".join(str(a.get(k, "")) for k in
-                    ("streetAddress", "postalCode", "addressLocality", "addressCountry") if a.get(k))
-            for v in o.values():
-                walk(v)
-
-    for b in blocks:
+def accept_cookies(page):
+    for sel in ["#onetrust-accept-btn-handler", "button:has-text('Accepter')",
+                "button:has-text('Tout accepter')", "button:has-text('Accept')"]:
         try:
-            walk(json.loads(b))
+            page.click(sel, timeout=1500)
+            return
         except Exception:
             pass
-    return out
 
-def click_reveal_buttons(page):
-    clicked = 0
-    for el in page.query_selector_all("button, a, span, div[role='button']"):
-        if clicked >= 4:
+
+def load_done(path: str) -> set:
+    if not os.path.exists(path):
+        return set()
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        return {row["url"] for row in csv.DictReader(f)}
+
+
+# --------------------------- COLLECT LINKS -----------------------------
+def collect_company_links(page, listing_url: str) -> list:
+    links, seen = [], set()
+    if not safe_goto(page, listing_url):
+        return links
+    accept_cookies(page)
+
+    for n in range(1, MAX_PAGES_PER_LISTING + 1):
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        new = 0
+        for h in hrefs:
+            h = h.split("?")[0].split("#")[0]
+            if COMPANY_LINK_RE.match(h) and h not in seen:
+                seen.add(h)
+                links.append(h)
+                new += 1
+        print(f"  listing page {n}: +{new} fiches (total {len(links)})")
+
+        nxt = None
+        for sel in ["a[rel='next']", "a.next", "li.next a",
+                    "a:has-text('Suivant')", "a:has-text('Next')", "a[aria-label='Next']"]:
+            loc = page.query_selector(sel)
+            if loc and loc.is_visible():
+                nxt = loc
+                break
+        if not nxt:
             break
         try:
-            txt = (el.inner_text() or "").strip()
-            if txt and len(txt) < 40 and REVEAL_RE.search(txt) and el.is_visible():
-                el.click(timeout=2000)
-                page.wait_for_timeout(1200)
-                clicked += 1
+            nxt.click()
+            page.wait_for_load_state("domcontentloaded")
+            time.sleep(random.uniform(*DELAY))
         except Exception:
-            continue
+            break
+    return links
 
-def get_details(page, url, first=False):
-    safe_goto(page, url)
-    page.wait_for_timeout(random.randint(2000, 3500))
-    click_reveal_buttons(page)
 
-    d = {"phone": "", "email": "", "website": "", "address": ""}
-    d.update({k: v for k, v in jsonld_data(page).items() if v})
+# ----------------------------- EXTRACTION ------------------------------
+def extract_info(page) -> dict:
+    info = {"name": "-", "tva": "-", "phone": "-", "postal": "-",
+            "address": "-", "city": "-"}
 
-    body = ""
+    # Nom
     try:
-        body = page.inner_text("body")
+        h1 = page.query_selector("h1")
+        if h1:
+            info["name"] = h1.inner_text().strip()
     except Exception:
         pass
 
-    if first:
-        with open("debug_company.html", "w", encoding="utf-8") as f:
-            f.write(page.content())
-        with open("debug_company.txt", "w", encoding="utf-8") as f:
-            f.write(body)
+    # 1) JSON-LD
+    for s in page.query_selector_all('script[type="application/ld+json"]'):
+        try:
+            data = json.loads(s.inner_text())
+        except Exception:
+            continue
+        for item in (data if isinstance(data, list) else [data]):
+            if not isinstance(item, dict):
+                continue
+            a = item.get("address")
+            if isinstance(a, dict):
+                info["address"] = a.get("streetAddress") or info["address"]
+                info["postal"] = a.get("postalCode") or info["postal"]
+                info["city"] = a.get("addressLocality") or info["city"]
+            if item.get("telephone"):
+                info["phone"] = item["telephone"]
+            if item.get("vatID"):
+                info["tva"] = item["vatID"]
 
-    # phone: JSON-LD -> tel: links -> text next to a Tel/Phone label
-    phone = normalize_be_phone(d["phone"])
-    if not phone:
-        for tel in page.query_selector_all("a[href^='tel:']"):
-            phone = normalize_be_phone(tel.get_attribute("href").replace("tel:", ""))
-            if phone:
-                break
-    if not phone:
-        phone = phone_from_text(body)
-    d["phone"] = phone
+    # 2) Fallback texte
+    text = page.inner_text("body")
 
-    if not d["email"]:
-        mail = page.query_selector("a[href^='mailto:']")
-        if mail:
-            d["email"] = mail.get_attribute("href").replace("mailto:", "").split("?")[0].strip()
-    if not d["email"]:
-        m = EMAIL_RE.search(body)
-        if m:
-            d["email"] = m.group(0)
-
-    if d["website"] and any(s in d["website"] for s in SKIP_SITES):
-        d["website"] = ""
-    if not d["website"]:
-        for a in page.query_selector_all("a[href^='http']"):
-            h = a.get_attribute("href") or ""
-            if not any(s in h for s in SKIP_SITES):
-                d["website"] = h
+    if info["tva"] == "-":
+        for m in VAT_RE.finditer(text):
+            d = "".join(m.groups()).rjust(10, "0")
+            if valid_be_vat(d):
+                info["tva"] = f"BE{d}"
                 break
 
-    if not d["address"]:
-        addr = page.query_selector("[itemprop='address'], address")
-        if addr:
-            d["address"] = " ".join(addr.inner_text().split())
-
-    name = ""
-    h1 = page.query_selector("h1")
-    if h1:
-        name = " ".join((h1.inner_text() or "").split())
-    return name, d
-
-# ---------- storage ----------
-
-def load_existing():
-    rows = {}
-    if os.path.exists(OUT):
-        with open(OUT, encoding="utf-8-sig", newline="") as f:
-            for r in csv.DictReader(f):
-                rows[r["url"]] = {k: r.get(k, "") for k in FIELDS}
-    return rows
-
-def save(rows):
-    with open(OUT, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS)
-        w.writeheader()
-        w.writerows(rows.values())
-
-# ---------- main ----------
-
-def main():
-    rows = load_existing()
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir="./chrome_profile", channel="chrome", headless=False,
-            locale="fr-BE", viewport={"width": 1366, "height": 850},
-            args=["--disable-blink-features=AutomationControlled"],
-            # proxy={"server": "http://host:port", "username": "...", "password": "..."},
-        )
-        ctx.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-
-        if START_URL:
-            safe_goto(page, START_URL)
+    if info["phone"] == "-":
+        # lien tel: en priorité
+        tel = page.query_selector("a[href^='tel:']")
+        if tel:
+            info["phone"] = tel.get_attribute("href").replace("tel:", "").strip()
         else:
-            safe_goto(page, BASE + "/fr")
-            print("\nSTART_URL is empty. Search by hand in Chrome, leave the results open.")
-            input("Press Enter once (then copy that URL into START_URL for next time)...")
+            m = PHONE_RE.search(text)
+            if m:
+                info["phone"] = m.group().strip()
+    info["phone"] = re.sub(r"[^\d+]", "", info["phone"]) or "-"
 
-        # ---- Phase 1: collect company links from result pages ----
-        page_no = 1
-        while page_no <= MAX_PAGES:
-            found = collect_company_links(ctx)
-            new = 0
-            for u, n in found.items():
-                if u not in rows:
-                    rows[u] = {"name": n, "url": u, "phone": "", "email": "",
-                               "website": "", "address": "", "done": ""}
-                    new += 1
-            print(f"[Page {page_no}] {len(found)} links, {new} new, total {len(rows)}")
-            save(rows)
+    if info["postal"] == "-" or info["address"] == "-":
+        m = ADDR_RE.search(text)
+        if m:
+            if info["address"] == "-":
+                info["address"] = m.group(1).strip()
+            if info["postal"] == "-":
+                info["postal"] = m.group(2)
+            if info["city"] == "-":
+                info["city"] = m.group(3).strip()
 
-            if not found:
-                pg = active_page(ctx)
-                with open("debug_page.html", "w", encoding="utf-8") as f:
-                    f.write(pg.content())
-                print("  No company links. Saved debug_page.html, URL:", pg.url)
-                break
-            if page_no >= MAX_PAGES:
-                break
-            if go_next(ctx, page_no, found.keys()):
-                page_no += 1
-                pause()
-            else:
-                print("  No more pages (or next button not found) - moving on.")
-                break
+    return info
 
-        # ---- Phase 2: open each company in its own tab ----
-        if GET_DETAILS:
-            todo = [u for u, r in rows.items() if r.get("done") != "1"]
-            if MAX_COMPANIES:
-                todo = todo[:MAX_COMPANIES]
-            print(f"\nOpening {len(todo)} company pages...")
-            dpage = ctx.new_page()
-            for i, url in enumerate(todo, 1):
+
+def scrape_company(page, url: str):
+    if not safe_goto(page, url):
+        return None
+    for attempt in range(1, RETRIES + 1):
+        try:
+            # Bouton "Afficher le numéro" éventuel
+            for sel in ["text=Afficher le numéro", "text=Afficher", "text=Show"]:
                 try:
-                    name, d = get_details(dpage, url, first=(i == 1))
-                    if name and not rows[url]["name"]:
-                        rows[url]["name"] = name
-                    rows[url].update(d)
-                    rows[url]["done"] = "1"
-                    print(f"  [{i}/{len(todo)}] {rows[url]['name'][:40]} | "
-                          f"{d['phone'] or '-'} | {d['email'] or '-'} | {d['website'] or '-'}")
-                except Exception as e:
-                    print("  error on", url, str(e).splitlines()[0])
-                save(rows)
-                pause()
-                if i % 25 == 0:
-                    print("  longer break...")
-                    time.sleep(random.uniform(30, 60))
-            dpage.close()
+                    page.click(sel, timeout=800)
+                    break
+                except Exception:
+                    pass
+            info = extract_info(page)
+            info["url"] = url
+            return info
+        except Exception as e:
+            # typique : "Execution context was destroyed" (redirection)
+            print(f"   extract retry {attempt}/{RETRIES}: {str(e)[:80]}")
+            time.sleep(2 * attempt)
+            try:
+                page.wait_for_load_state("domcontentloaded")
+            except Exception:
+                pass
+    return None
 
-        ctx.close()
-    print("Saved", len(rows), "rows to", OUT)
+
+# ------------------------------- MAIN ----------------------------------
+def main():
+    done = load_done(OUTPUT_CSV)
+    new_file = not os.path.exists(OUTPUT_CSV)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=HEADLESS)
+        ctx = browser.new_context(locale="fr-BE", viewport={"width": 1366, "height": 850})
+        page = ctx.new_page()
+
+        # 1) Liste des fiches à traiter
+        urls = []
+        if os.path.exists(URLS_FILE):
+            with open(URLS_FILE, encoding="utf-8") as f:
+                urls += [l.strip() for l in f if l.strip()]
+        for lu in LISTING_URLS:
+            print(f"Listing : {lu}")
+            urls += collect_company_links(page, lu)
+
+        urls = [u for u in dict.fromkeys(urls) if u not in done]
+        total = len(urls)
+        print(f"{total} fiches à scraper ({len(done)} déjà faites)")
+
+        # 2) Scraping
+        with open(OUTPUT_CSV, "a", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDS, delimiter=";")
+            if new_file:
+                writer.writeheader()
+
+            for i, url in enumerate(urls, 1):
+                info = scrape_company(page, url)
+                if not info:
+                    print(f"[{i}/{total}] ECHEC {url}")
+                    continue
+                writer.writerow({k: info.get(k, "-") for k in FIELDS})
+                f.flush()
+                print(f"[{i}/{total}] {info['name']} | {info['tva']} | "
+                      f"{info['phone']} | {info['postal']} | {info['address']}")
+                pause()
+
+        browser.close()
+    print(f"Terminé -> {OUTPUT_CSV}")
+
 
 if __name__ == "__main__":
     main()
