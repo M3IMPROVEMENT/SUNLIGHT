@@ -1,15 +1,120 @@
-playwright._impl._errors.Error: Page.query_selector_all: Execution context was destroyed, most likely because of a navigation
-PS C:\Users\Sunlight-call\Desktop\kompass> PYTHON Kompass-be.py
 
-1) In Chrome: accept cookies, solve any check.
-2) Search for companies yourself (keyword, Belgium, etc.)
-3) Leave the FIRST results page open and fully loaded.
+import re
+from pathlib import Path
+from datetime import datetime
+import pandas as pd
 
-Press Enter here when ready...
-[Page 1] 81 links, 81 new, total 81
-[Page 2] 81 links, 81 new, total 162
-[Page 3] 81 links, 81 new, total 243
-[Page 4] 81 links, 81 new, total 324
-[Page 5] 81 links, 81 new, total 405
-Saved 405 rows to kompass_belgium.csv
-PS C:\Users\Sunlight-call\Desktop\kompass> 
+# ============================================================
+# CONFIGURATION — CHANGE THE INPUT PATH
+# ============================================================
+
+INPUT_FOLDER = Path(
+    r"C:\Users\Sunlight\Desktop\TELE_FILES"
+)
+
+OUTPUT_FOLDER = INPUT_FOLDER.parent / (
+    "TELE_CLEANED_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+)
+OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# CLEAN TELE — NO DEDUPLICATION
+# ============================================================
+
+def clean_tele(value):
+    if pd.isna(value):
+        return value
+
+    s = str(value).strip()
+
+    if not s:
+        return s
+
+    # Remove Excel numeric suffix, e.g. 471234567.0
+    if re.fullmatch(r"\d+\.0", s):
+        s = s[:-2]
+
+    # Keep digits only
+    digits = re.sub(r"\D", "", s)
+
+    if not digits:
+        return s
+
+    # Remove international prefixes and convert to local format
+    if digits.startswith("0032"):
+        digits = digits[4:]
+    elif digits.startswith("32") and len(digits) in (10, 11):
+        digits = digits[2:]
+
+    # Handle Belgian international format with an extra zero:
+    # +32 (0) 471234567
+    if digits.startswith("0") and len(digits) in (9, 10):
+        digits = digits[1:]
+
+    # Add the Belgian local leading zero after country code removal
+    # or preserve an existing local number.
+    if len(digits) in (8, 9):
+        return "0" + digits
+
+    # Leave unusual-length values as digits, without guessing
+    return digits
+
+
+# ============================================================
+# PROCESS ALL EXCEL FILES
+# ============================================================
+
+files = [
+    f for f in INPUT_FOLDER.iterdir()
+    if f.is_file()
+    and f.suffix.lower() in (".xlsx", ".xlsm")
+    and not f.name.startswith("~$")
+]
+
+if not files:
+    raise FileNotFoundError(
+        f"No Excel files found in {INPUT_FOLDER}"
+    )
+
+processed = 0
+errors = []
+
+for file_path in files:
+    try:
+        df = pd.read_excel(file_path, dtype=object)
+
+        # Find TELE regardless of capitalization or outer spaces
+        tele_cols = [
+            col for col in df.columns
+            if str(col).strip().upper() == "TELE"
+        ]
+
+        if not tele_cols:
+            print(f"[SKIPPED: TELE NOT FOUND] {file_path.name}")
+            errors.append(file_path.name)
+            continue
+
+        tele_col = tele_cols[0]
+
+        # Clean only TELE. Keep every row and every duplicate.
+        df[tele_col] = df[tele_col].apply(clean_tele)
+
+        output_path = OUTPUT_FOLDER / (
+            file_path.stem + "_CLEANED" + file_path.suffix
+        )
+
+        df.to_excel(output_path, index=False, engine="openpyxl")
+
+        processed += 1
+        print(f"[OK] {file_path.name} — {len(df):,} rows preserved")
+
+    except Exception as e:
+        errors.append(file_path.name)
+        print(f"[ERROR] {file_path.name}: {e}")
+
+print("\n========== FINISHED ==========")
+print(f"Files found: {len(files)}")
+print(f"Files cleaned: {processed}")
+print(f"Files with errors: {len(errors)}")
+print(f"Output folder: {OUTPUT_FOLDER}")
