@@ -1,15 +1,84 @@
-import re
+import pandas as pd
+from pathlib import Path
 
-VAT_RE = re.compile(r"\bBE[\s.]?(0?\d{3})[\s.]?(\d{3})[\s.]?(\d{3})\b", re.I)
+# ============================================================
+# CONFIG
+# ============================================================
 
-def valid_be_vat(digits: str) -> bool:
-    # digits = 10 chiffres ; contrôle modulo 97
-    return len(digits) == 10 and 97 - int(digits[:8]) % 97 == int(digits[8:])
+input_file = Path(r"C:\Users\Sunlight\Desktop\01-10-26\TELE_CLEANED_20261012_164004")
+output_file = Path(r"C:\Users\Sunlight\Desktop\01-10-26\CLEAN-REMOVE-DEDU")
 
-def extract_vat(page) -> str:
-    text = page.inner_text("body")
-    for m in VAT_RE.finditer(text):
-        d = "".join(m.groups()).rjust(10, "0")
-        if valid_be_vat(d):
-            return f"BE{d}"
-    return "-"
+# ============================================================
+# READ FILE
+# ============================================================
+
+df = pd.read_excel(input_file, dtype=str)
+
+# Keep the original data exactly as it is
+df = df.fillna("")
+
+# Phone columns
+phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
+
+# Make sure the columns exist
+for col in phone_columns:
+    if col not in df.columns:
+        df[col] = ""
+
+# ============================================================
+# CREATE ONE ROW PER PHONE
+# ============================================================
+
+rows = []
+
+for _, row in df.iterrows():
+
+    phones_found = False
+
+    for col in phone_columns:
+
+        phone = str(row[col]).strip()
+
+        if phone != "":
+            phones_found = True
+
+            new_row = row.copy()
+
+            # Put the phone in TELE
+            new_row["TELE"] = phone
+
+            rows.append(new_row)
+
+    # If the original row has NO phone at all,
+    # keep the row with TELE empty
+    if not phones_found:
+        new_row = row.copy()
+        new_row["TELE"] = ""
+        rows.append(new_row)
+
+# ============================================================
+# CREATE FINAL DATAFRAME
+# ============================================================
+
+result = pd.DataFrame(rows)
+
+# ============================================================
+# REMOVE ORIGINAL PHONE COLUMNS
+# ============================================================
+
+result = result.drop(columns=phone_columns)
+
+# Put TELE where you want it
+# Here it will be at the end.
+# If you want it somewhere specific, we can move it.
+
+# ============================================================
+# SAVE
+# ============================================================
+
+result.to_excel(output_file, index=False)
+
+print("DONE")
+print(f"Original rows : {len(df):,}")
+print(f"Final rows    : {len(result):,}")
+print(f"Output        : {output_file}")
