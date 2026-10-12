@@ -1,3 +1,4 @@
+
 import pandas as pd
 from pathlib import Path
 
@@ -5,80 +6,126 @@ from pathlib import Path
 # CONFIG
 # ============================================================
 
-input_file = Path(r"C:\Users\Sunlight\Desktop\01-10-26\TELE_CLEANED_20261012_164004")
-output_file = Path(r"C:\Users\Sunlight\Desktop\01-10-26\CLEAN-REMOVE-DEDU")
+INPUT_FOLDER = Path(
+    r"C:\Users\Sunlight\Desktop\01-10-26\TELE_CLEANED_20261012_164004"
+)
 
-# ============================================================
-# READ FILE
-# ============================================================
+OUTPUT_FOLDER = Path(
+    r"C:\Users\Sunlight\Desktop\01-10-26\CLEAN-REMOVE-DEDU"
+)
 
-df = pd.read_excel(input_file, dtype=str)
+OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
-# Keep the original data exactly as it is
-df = df.fillna("")
-
-# Phone columns
 phone_columns = ["GSM", "TEL1", "TEL2", "TEL3"]
 
-# Make sure the columns exist
-for col in phone_columns:
-    if col not in df.columns:
-        df[col] = ""
-
 # ============================================================
-# CREATE ONE ROW PER PHONE
+# FIND ALL EXCEL FILES
 # ============================================================
 
-rows = []
+files = [
+    f for f in INPUT_FOLDER.iterdir()
+    if f.is_file()
+    and f.suffix.lower() in [".xlsx", ".xlsm"]
+    and not f.name.startswith("~$")
+]
 
-for _, row in df.iterrows():
-
-    phones_found = False
-
-    for col in phone_columns:
-
-        phone = str(row[col]).strip()
-
-        if phone != "":
-            phones_found = True
-
-            new_row = row.copy()
-
-            # Put the phone in TELE
-            new_row["TELE"] = phone
-
-            rows.append(new_row)
-
-    # If the original row has NO phone at all,
-    # keep the row with TELE empty
-    if not phones_found:
-        new_row = row.copy()
-        new_row["TELE"] = ""
-        rows.append(new_row)
+if not files:
+    raise FileNotFoundError(
+        f"No Excel files found in: {INPUT_FOLDER}"
+    )
 
 # ============================================================
-# CREATE FINAL DATAFRAME
+# PROCESS EACH FILE
 # ============================================================
 
-result = pd.DataFrame(rows)
+total_original_rows = 0
+total_final_rows = 0
+processed = 0
+errors = []
+
+for input_file in files:
+    try:
+        print(f"\nProcessing: {input_file.name}")
+
+        # Read file
+        df = pd.read_excel(input_file, dtype=str).fillna("")
+
+        total_original_rows += len(df)
+
+        # Ensure phone columns exist
+        for col in phone_columns:
+            if col not in df.columns:
+                df[col] = ""
+
+        # Ensure TELE exists
+        if "TELE" not in df.columns:
+            df["TELE"] = ""
+
+        # Convert phone columns to strings and trim spaces
+        for col in phone_columns:
+            df[col] = df[col].astype(str).str.strip()
+
+        # Create one row for each phone found
+        rows = []
+
+        for _, row in df.iterrows():
+
+            phones_found = False
+
+            for col in phone_columns:
+                phone = row[col]
+
+                if phone != "":
+                    phones_found = True
+                    new_row = row.copy()
+                    new_row["TELE"] = phone
+                    rows.append(new_row)
+
+            # Keep the original row if no phone was found
+            if not phones_found:
+                new_row = row.copy()
+                new_row["TELE"] = ""
+                rows.append(new_row)
+
+        # Build result
+        result = pd.DataFrame(rows, columns=df.columns)
+
+        # Remove original phone columns
+        result = result.drop(columns=phone_columns)
+
+        # Save each output with the original filename
+        output_file = OUTPUT_FOLDER / (
+            input_file.stem + "_CLEANED.xlsx"
+        )
+
+        result.to_excel(output_file, index=False)
+
+        total_final_rows += len(result)
+        processed += 1
+
+        print(f"Original rows: {len(df):,}")
+        print(f"Final rows:    {len(result):,}")
+        print(f"Saved:         {output_file.name}")
+
+    except Exception as e:
+        errors.append((input_file.name, str(e)))
+        print(f"ERROR: {input_file.name} — {e}")
 
 # ============================================================
-# REMOVE ORIGINAL PHONE COLUMNS
+# FINAL REPORT
 # ============================================================
 
-result = result.drop(columns=phone_columns)
+print("\n" + "=" * 50)
+print("PROCESSING FINISHED")
+print("=" * 50)
+print(f"Files found:          {len(files)}")
+print(f"Files processed:      {processed}")
+print(f"Files with errors:    {len(errors)}")
+print(f"Total original rows:  {total_original_rows:,}")
+print(f"Total final rows:     {total_final_rows:,}")
+print(f"Output folder:        {OUTPUT_FOLDER}")
 
-# Put TELE where you want it
-# Here it will be at the end.
-# If you want it somewhere specific, we can move it.
-
-# ============================================================
-# SAVE
-# ============================================================
-
-result.to_excel(output_file, index=False)
-
-print("DONE")
-print(f"Original rows : {len(df):,}")
-print(f"Final rows    : {len(result):,}")
-print(f"Output        : {output_file}")
+if errors:
+    print("\nFiles with errors:")
+    for name, error in errors:
+        print(f"- {name}: {error}")
