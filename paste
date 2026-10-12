@@ -1,14 +1,556 @@
+import json
+import re
+import sqlite3
+from pathlib import Path
+
+from openpyxl import load_workbook, Workbook
 
 
-Creating SQLite database...
-Traceback (most recent call last):
-  File "C:\Users\Sunlight\Desktop\01-10-26\CLEAN-REMOVE-DEDU\script.py", line 1147, in <module>
+# ============================================================
+# CONFIGURATION — EDIT THESE PATHS IF NEEDED
+# ============================================================
+
+# Folder containing the source Excel files
+INPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\01-10-26\TEST")
+
+# Folder where final Excel files and audit files will be saved
+OUTPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\01-10-26\CLEAN-REMOVE-DEDU")
+
+# Keep the SQLite database in the output folder.
+# The script creates the parent folder automatically.
+SQLITE_FILE = OUTPUT_FOLDER / "deduplication_temp.db"
+
+CHUNK_SIZE = 100_000
+MAX_OUTPUT_ROWS = 1_000_000  # data rows per output file, excluding header
+
+TELE_COLUMN = "TELE"
+TVA_COLUMN = "TVA"
+
+# Set to True only if you want the temporary SQLite database kept for debugging.
+KEEP_SQLITE_DATABASE = False
+
+
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
+def is_empty(value):
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    return False
+
+
+def clean_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def json_row(row):
+    return json.dumps(list(row), ensure_ascii=False, default=str)
+
+
+def find_column(headers, column_name):
+    target = column_name.strip().upper()
+    for index, header in enumerate(headers):
+        if clean_text(header).strip().upper() == target:
+            return index
+    return None
+
+
+# ============================================================
+# TELEPHONE NORMALIZATION
+# ============================================================
+
+def normalize_tele(value):
+    """Normalize common Belgian telephone formats for duplicate matching."""
+    if is_empty(value):
+        return ""
+
+    text_value = clean_text(value)
+
+    # Handle Excel numbers stored as text with a trailing .0
+    if text_value.endswith(".0"):
+        text_value = text_value[:-2]
+
+    digits = re.sub(r"\D", "", text_value)
+    if not digits:
+        return ""
+
+    # +32 / 0032 international prefix -> Belgian local leading 0
+    if digits.startswith("0032"):
+        digits = "32" + digits[4:]
+
+    if digits.startswith("32"):
+        digits = "0" + digits[2:]
+
+    # 9-digit Belgian number without leading 0
+    elif len(digits) == 9:
+        digits = "0" + digits
+
+    return digits
+
+
+def has_tva(value):
+    if is_empty(value):
+        return False
+    text_value = re.sub(r"\s+", "", clean_text(value).upper())
+    return text_value not in {"", "NONE", "NAN", "NULL"}
+
+
+def row_score(row):
+    return sum(not is_empty(value) for value in row)
+
+
+# ============================================================
+# MERGE TWO ROWS WITH THE SAME NORMALIZED TELE
+# ============================================================
+
+def merge_rows(old_row, new_row, tva_index):
+    old_has_tva = has_tva(old_row[tva_index]) if tva_index is not None else False
+    new_has_tva = has_tva(new_row[tva_index]) if tva_index is not None else False
+
+    old_score = row_score(old_row)
+    new_score = row_score(new_row)
+
+    if new_has_tva and not old_has_tva:
+        primary, secondary = new_row, old_row
+        decision = "KEEP NEW - TVA"
+    elif old_has_tva and not new_has_tva:
+        primary, secondary = old_row, new_row
+        decision = "KEEP OLD - TVA"
+    elif new_score > old_score:
+        primary, secondary = new_row, old_row
+        decision = "KEEP NEW - MORE COMPLETE"
+    else:
+        primary, secondary = old_row, new_row
+        decision = "KEEP OLD - MORE COMPLETE"
+
+    merged = list(primary)
+    for index in range(len(merged)):
+        if is_empty(merged[index]) and not is_empty(secondary[index]):
+            merged[index] = secondary[index]
+
+    return merged, decision, (primary is new_row)
+
+
+# ============================================================
+# SQLITE DATABASE
+# ============================================================
+
+def create_database():
+    # FIX: ensure the parent folder exists before sqlite3.connect()
+    SQLITE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    # Remove an old database and its SQLite sidecar files, if present.
+    # This script starts a fresh run; do not use this if you need old DB data.
+    for candidate in (
+        SQLITE_FILE,
+        Path(str(SQLITE_FILE) + "-journal"),
+        Path(str(SQLITE_FILE) + "-wal"),
+        Path(str(SQLITE_FILE) + "-shm"),
+    ):
+        try:
+            if candidate.exists():
+                candidate.unlink()
+        except PermissionError as exc:
+            raise PermissionError(
+                f"Cannot remove {candidate}. Close programs using it "
+                "and check folder permissions."
+            ) from exc
+
+    print(f"SQLite database location: {SQLITE_FILE}")
+    conn = sqlite3.connect(str(SQLITE_FILE), timeout=60)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=FILE")
+
+    conn.execute("""
+        CREATE TABLE records (
+            tele_key TEXT PRIMARY KEY,
+            row_data TEXT NOT NULL,
+            source_file TEXT NOT NULL
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE duplicate_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tele TEXT,
+            old_tva TEXT,
+            new_tva TEXT,
+            decision TEXT,
+            old_file TEXT,
+            new_file TEXT,
+            old_row TEXT,
+            new_row TEXT
+        )
+    """)
+
+    conn.commit()
+    print("SQLite database created successfully.")
+    return conn
+
+
+# ============================================================
+# PROCESS A CHUNK OF ROWS
+# ============================================================
+
+def process_chunk(rows, headers, conn, source_file, empty_counter):
+    cursor = conn.cursor()
+
+    tele_index = find_column(headers, TELE_COLUMN)
+    if tele_index is None:
+        raise ValueError(f"Column '{TELE_COLUMN}' not found.")
+
+    tva_index = find_column(headers, TVA_COLUMN)
+
+    inserted = 0
+    duplicates = 0
+
+    for source_row in rows:
+        row = list(source_row)
+
+        if len(row) < len(headers):
+            row.extend([""] * (len(headers) - len(row)))
+        elif len(row) > len(headers):
+            row = row[:len(headers)]
+
+        tele_key = normalize_tele(row[tele_index])
+
+        # Empty TELE rows are retained individually, not deduplicated.
+        if not tele_key:
+            empty_counter[0] += 1
+            unique_key = f"__EMPTY_TELE__{empty_counter[0]}"
+            cursor.execute(
+                "INSERT INTO records (tele_key, row_data, source_file) VALUES (?, ?, ?)",
+                (unique_key, json_row(row), source_file),
+            )
+            inserted += 1
+            continue
+
+        cursor.execute(
+            "SELECT row_data, source_file FROM records WHERE tele_key = ?",
+            (tele_key,),
+        )
+        existing = cursor.fetchone()
+
+        if existing is None:
+            cursor.execute(
+                "INSERT INTO records (tele_key, row_data, source_file) VALUES (?, ?, ?)",
+                (tele_key, json_row(row), source_file),
+            )
+            inserted += 1
+            continue
+
+        duplicates += 1
+        old_row = json.loads(existing[0])
+        old_source_file = existing[1]
+
+        old_tva = clean_text(old_row[tva_index]) if tva_index is not None else ""
+        new_tva = clean_text(row[tva_index]) if tva_index is not None else ""
+
+        merged_row, decision, chose_new = merge_rows(old_row, row, tva_index)
+
+        cursor.execute("""
+            INSERT INTO duplicate_audit
+            (tele, old_tva, new_tva, decision, old_file, new_file, old_row, new_row)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            tele_key,
+            old_tva,
+            new_tva,
+            decision,
+            old_source_file,
+            source_file,
+            json_row(old_row),
+            json_row(row),
+        ))
+
+        updated_source = source_file if chose_new else old_source_file
+        cursor.execute("""
+            UPDATE records
+            SET row_data = ?, source_file = ?
+            WHERE tele_key = ?
+        """, (json_row(merged_row), updated_source, tele_key))
+
+    conn.commit()
+    return inserted, duplicates
+
+
+# ============================================================
+# PROCESS ONE EXCEL FILE
+# ============================================================
+
+def process_excel_file(file_path, conn, reference_headers, empty_counter):
+    print(f"\nPROCESSING: {file_path.name}")
+
+    workbook = load_workbook(
+        filename=file_path,
+        read_only=True,
+        data_only=True,
+    )
+
+    try:
+        worksheet = workbook.active
+        iterator = worksheet.iter_rows(values_only=True)
+
+        try:
+            raw_headers = list(next(iterator))
+        except StopIteration:
+            print("Skipped empty workbook.")
+            return reference_headers
+
+        headers = [clean_text(value) for value in raw_headers]
+
+        if find_column(headers, TELE_COLUMN) is None:
+            raise ValueError(
+                f"Column '{TELE_COLUMN}' not found in {file_path.name}. "
+                f"Available columns: {headers}"
+            )
+
+        if reference_headers is None:
+            reference_headers = headers
+        elif headers != reference_headers:
+            raise ValueError(
+                f"Column structure differs in {file_path.name}.\n"
+                f"Expected: {reference_headers}\nFound: {headers}"
+            )
+
+        total_rows = 0
+        total_inserted = 0
+        total_duplicates = 0
+        chunk = []
+
+        for row in iterator:
+            # Ignore entirely blank rows
+            if row is None or all(is_empty(value) for value in row):
+                continue
+
+            chunk.append(row)
+
+            if len(chunk) >= CHUNK_SIZE:
+                inserted, duplicates = process_chunk(
+                    chunk, reference_headers, conn, file_path.name, empty_counter
+                )
+                total_rows += len(chunk)
+                total_inserted += inserted
+                total_duplicates += duplicates
+                print(
+                    f"  Processed {total_rows:,} rows | "
+                    f"new {total_inserted:,} | duplicates {total_duplicates:,}"
+                )
+                chunk = []
+
+        if chunk:
+            inserted, duplicates = process_chunk(
+                chunk, reference_headers, conn, file_path.name, empty_counter
+            )
+            total_rows += len(chunk)
+            total_inserted += inserted
+            total_duplicates += duplicates
+
+        print(
+            f"Finished {file_path.name}: {total_rows:,} rows processed, "
+            f"{total_inserted:,} new records, {total_duplicates:,} duplicates."
+        )
+        return reference_headers
+
+    finally:
+        workbook.close()
+
+
+# ============================================================
+# EXCEL OUTPUT HELPERS
+# ============================================================
+
+def create_output_workbook(path, sheet_name, headers):
+    workbook = Workbook(write_only=True)
+    worksheet = workbook.create_sheet(sheet_name)
+    worksheet.append(headers)
+    return workbook, worksheet, path
+
+
+def export_main_results(conn, headers):
+    cursor = conn.cursor()
+    cursor.execute("SELECT row_data FROM records ORDER BY rowid")
+
+    part_number = 1
+    rows_in_part = 0
+    total_exported = 0
+
+    path = OUTPUT_FOLDER / f"deduplicated_part_{part_number:02d}.xlsx"
+    workbook, worksheet, path = create_output_workbook(path, "Data", headers)
+
+    print("\nEXPORTING FINAL DEDUPLICATED DATA")
+
+    for (row_json,) in cursor:
+        if rows_in_part >= MAX_OUTPUT_ROWS:
+            workbook.save(path)
+            print(f"Created {path.name} ({rows_in_part:,} data rows)")
+
+            part_number += 1
+            rows_in_part = 0
+            path = OUTPUT_FOLDER / f"deduplicated_part_{part_number:02d}.xlsx"
+            workbook, worksheet, path = create_output_workbook(path, "Data", headers)
+
+        worksheet.append(json.loads(row_json))
+        rows_in_part += 1
+        total_exported += 1
+
+        if total_exported % 100_000 == 0:
+            print(f"  Exported {total_exported:,} rows")
+
+    if rows_in_part or total_exported == 0:
+        workbook.save(path)
+        print(f"Created {path.name} ({rows_in_part:,} data rows)")
+
+    print(f"TOTAL FINAL DATA ROWS: {total_exported:,}")
+    print(f"FINAL DATA FILES: {part_number}")
+
+
+def export_duplicate_audit(conn, headers):
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT tele, old_tva, new_tva, decision, old_file, new_file, old_row, new_row
+        FROM duplicate_audit
+        ORDER BY id
+    """)
+
+    audit_headers = [
+        "TELE", "OLD_TVA", "NEW_TVA", "DECISION", "OLD_FILE", "NEW_FILE"
+    ]
+    audit_headers.extend([f"OLD_{header}" for header in headers])
+    audit_headers.extend([f"NEW_{header}" for header in headers])
+
+    part_number = 1
+    rows_in_part = 0
+    total_audits = 0
+
+    path = OUTPUT_FOLDER / f"DUPLICATES_AUDIT_part_{part_number:02d}.xlsx"
+    workbook, worksheet, path = create_output_workbook(path, "Duplicates", audit_headers)
+
+    print("\nEXPORTING DUPLICATE AUDIT")
+
+    for result in cursor:
+        tele, old_tva, new_tva, decision, old_file, new_file, old_json, new_json = result
+
+        if rows_in_part >= MAX_OUTPUT_ROWS:
+            workbook.save(path)
+            print(f"Created {path.name} ({rows_in_part:,} duplicate rows)")
+
+            part_number += 1
+            rows_in_part = 0
+            path = OUTPUT_FOLDER / f"DUPLICATES_AUDIT_part_{part_number:02d}.xlsx"
+            workbook, worksheet, path = create_output_workbook(path, "Duplicates", audit_headers)
+
+        audit_row = [tele, old_tva, new_tva, decision, old_file, new_file]
+        audit_row.extend(json.loads(old_json))
+        audit_row.extend(json.loads(new_json))
+        worksheet.append(audit_row)
+
+        rows_in_part += 1
+        total_audits += 1
+
+        if total_audits % 100_000 == 0:
+            print(f"  Exported {total_audits:,} audit rows")
+
+    if rows_in_part or total_audits == 0:
+        workbook.save(path)
+        print(f"Created {path.name} ({rows_in_part:,} duplicate rows)")
+
+    print(f"TOTAL DUPLICATE AUDIT ROWS: {total_audits:,}")
+    print(f"AUDIT FILES: {part_number}")
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+    print("=" * 70)
+    print("EXCEL TELEPHONE DEDUPLICATION")
+    print("=" * 70)
+    print(f"Input folder : {INPUT_FOLDER}")
+    print(f"Output folder: {OUTPUT_FOLDER}")
+    print(f"SQLite file  : {SQLITE_FILE}")
+
+    if not INPUT_FOLDER.exists():
+        raise FileNotFoundError(f"Input folder does not exist: {INPUT_FOLDER}")
+
+    OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
+
+    # Process only source .xlsx/.xlsm files directly inside INPUT_FOLDER.
+    # Temporary Excel lock files (~$...) are excluded.
+    output_resolved = OUTPUT_FOLDER.resolve()
+    input_files = sorted(
+        file for file in INPUT_FOLDER.iterdir()
+        if file.is_file()
+        and file.suffix.lower() in {".xlsx", ".xlsm"}
+        and not file.name.startswith("~$")
+        and file.resolve().parent != output_resolved
+    )
+
+    # If input and output are the same folder, exclude files generated by this script.
+    input_files = [
+        file for file in input_files
+        if not file.name.startswith("deduplicated_part_")
+        and not file.name.startswith("DUPLICATES_AUDIT_part_")
+    ]
+
+    if not input_files:
+        raise FileNotFoundError(
+            f"No .xlsx or .xlsm files found in: {INPUT_FOLDER}"
+        )
+
+    print(f"Excel files found: {len(input_files)}")
+
+    conn = None
+    try:
+        print("\nCreating SQLite database...")
+        conn = create_database()
+
+        reference_headers = None
+        empty_counter = [0]
+
+        for index, file_path in enumerate(input_files, start=1):
+            print(f"\nFILE {index}/{len(input_files)}")
+            reference_headers = process_excel_file(
+                file_path, conn, reference_headers, empty_counter
+            )
+
+        if reference_headers is None:
+            raise ValueError("No usable Excel headers were found.")
+
+        export_main_results(conn, reference_headers)
+        export_duplicate_audit(conn, reference_headers)
+
+        print("\n" + "=" * 70)
+        print("PROCESS COMPLETED SUCCESSFULLY")
+        print(f"Results saved in: {OUTPUT_FOLDER}")
+        print("=" * 70)
+
+    finally:
+        if conn is not None:
+            conn.close()
+
+        if not KEEP_SQLITE_DATABASE:
+            for candidate in (
+                SQLITE_FILE,
+                Path(str(SQLITE_FILE) + "-journal"),
+                Path(str(SQLITE_FILE) + "-wal"),
+                Path(str(SQLITE_FILE) + "-shm"),
+            ):
+                try:
+                    if candidate.exists():
+                        candidate.unlink()
+                except OSError as exc:
+                    print(f"Warning: could not remove temporary file {candidate}: {exc}")
+
+
+if __name__ == "__main__":
     main()
-  File "C:\Users\Sunlight\Desktop\01-10-26\CLEAN-REMOVE-DEDU\script.py", line 1056, in main
-    conn = create_database()
-           ^^^^^^^^^^^^^^^^^
-  File "C:\Users\Sunlight\Desktop\01-10-26\CLEAN-REMOVE-DEDU\script.py", line 210, in create_database
-    conn = sqlite3.connect(
-           ^^^^^^^^^^^^^^^^
-sqlite3.OperationalError: unable to open database file
-PS C:\Users\Sunlight\Desktop\01-10-26\CLEAN-REMOVE-DEDU> 
