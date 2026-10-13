@@ -1,19 +1,225 @@
+from pathlib import Path
+from openpyxl import load_workbook
 import re
 
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+INPUT_FOLDER = Path(
+    r"C:\Users\Sunlight\Desktop\01-10-26\TELE_CLEANED_20261012_164004"
+)
+
+OUTPUT_FOLDER = Path(
+    r"C:\Users\Sunlight\Desktop\01-10-26\CLEAN-REMOVE-DEDU"
+)
+
+COLUMN_NAME = "TELE"
+
+# ============================================================
+# CLEAN TELE COLUMN
+# ============================================================
+
 def clean_tele(value):
+
+    # Keep empty cells empty
     if value is None:
         return None
 
-    # Preserve formulas
+    # Never modify formulas
     if isinstance(value, str) and value.startswith("="):
         return value
 
-    # Handle Excel numeric values such as 471234567.0
+    # Fix Excel numeric values such as 471234567.0
     if isinstance(value, float) and value.is_integer():
         value = int(value)
 
-    # Convert to text and remove everything except digits
-    digits = re.sub(r"[^0-9]", "", str(value))
+    # Convert to string
+    text = str(value).strip()
 
-    # If no digits remain, leave the cell blank
-    return digits if digits else None
+    # Remove EVERYTHING except digits 0-9
+    digits = re.sub(r"[^0-9]", "", text)
+
+    # If there are no digits, clear the cell
+    # Do not delete the row
+    if not digits:
+        return None
+
+    return digits
+
+
+# ============================================================
+# PROCESS ONE EXCEL FILE
+# ============================================================
+
+def process_file(input_file, output_file):
+
+    keep_vba = input_file.suffix.lower() == ".xlsm"
+
+    workbook = load_workbook(
+        input_file,
+        read_only=False,
+        data_only=False,
+        keep_vba=keep_vba
+    )
+
+    try:
+        total_changed = 0
+        total_cleared = 0
+        sheets_processed = 0
+
+        for sheet in workbook.worksheets:
+
+            # Find TELE header in row 1
+            tele_col = None
+
+            for cell in sheet[1]:
+                if (
+                    isinstance(cell.value, str)
+                    and cell.value.strip().casefold() == COLUMN_NAME.casefold()
+                ):
+                    tele_col = cell.column
+                    break
+
+            # Skip sheets without a TELE column
+            if tele_col is None:
+                continue
+
+            sheets_processed += 1
+
+            # Process TELE cells without deleting rows
+            for row_num in range(2, sheet.max_row + 1):
+
+                cell = sheet.cell(
+                    row=row_num,
+                    column=tele_col
+                )
+
+                # Preserve formulas
+                if cell.data_type == "f":
+                    continue
+
+                old_value = cell.value
+
+                # Skip already-empty cells
+                if old_value is None:
+                    continue
+
+                new_value = clean_tele(old_value)
+
+                # Update only when the value changes
+                if new_value != old_value:
+
+                    if new_value is None:
+                        total_cleared += 1
+
+                    cell.value = new_value
+                    total_changed += 1
+
+        # Do not overwrite an existing input file
+        if sheets_processed == 0:
+            print(
+                f"[SKIPPED] {input_file.name}: "
+                f"TELE column not found in row 1"
+            )
+            return False
+
+        # Create output folder if necessary
+        output_file.parent.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+        # Save cleaned copy
+        workbook.save(output_file)
+
+        print(f"\n[OK] {input_file.name}")
+        print(f"Sheets processed: {sheets_processed}")
+        print(f"Cells changed: {total_changed}")
+        print(f"Cells cleared: {total_cleared}")
+        print(f"Saved to: {output_file}")
+
+        return True
+
+    finally:
+        workbook.close()
+
+
+# ============================================================
+# PROCESS ALL EXCEL FILES
+# ============================================================
+
+def main():
+
+    if not INPUT_FOLDER.exists() or not INPUT_FOLDER.is_dir():
+        print(f"ERROR: Input folder not found:\n{INPUT_FOLDER}")
+        return
+
+    OUTPUT_FOLDER.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    # Find Excel files directly inside the input folder
+    excel_files = sorted(
+        file for file in INPUT_FOLDER.iterdir()
+        if file.is_file()
+        and file.suffix.lower() in (".xlsx", ".xlsm")
+        and not file.name.startswith("~$")
+    )
+
+    if not excel_files:
+        print("No Excel files found in the input folder.")
+        return
+
+    print("=" * 60)
+    print("TELE COLUMN CLEANING")
+    print("=" * 60)
+    print(f"Input files: {len(excel_files)}")
+    print(f"Output folder: {OUTPUT_FOLDER}")
+
+    success = 0
+    skipped = 0
+    failed = 0
+
+    for index, input_file in enumerate(excel_files, start=1):
+
+        print(
+            f"\n[{index}/{len(excel_files)}] "
+            f"Processing: {input_file.name}"
+        )
+
+        output_file = OUTPUT_FOLDER / (
+            input_file.stem
+            + "_TELE_CLEANED"
+            + input_file.suffix
+        )
+
+        try:
+            result = process_file(
+                input_file,
+                output_file
+            )
+
+            if result:
+                success += 1
+            else:
+                skipped += 1
+
+        except Exception as error:
+            failed += 1
+            print(f"[ERROR] {input_file.name}: {error}")
+
+    # Final report
+    print("\n" + "=" * 60)
+    print("CLEANING COMPLETED")
+    print("=" * 60)
+    print(f"Total files found: {len(excel_files)}")
+    print(f"Successfully processed: {success}")
+    print(f"Skipped: {skipped}")
+    print(f"Failed: {failed}")
+    print(f"Output folder: {OUTPUT_FOLDER}")
+
+
+if __name__ == "__main__":
+    main()
