@@ -4,22 +4,20 @@ import re
 from pathlib import Path
 
 # ============================================================
-# CONFIGURATION — CHANGE THESE TWO PATHS
+# CONFIGURATION
 # ============================================================
 
 INPUT_FILE = Path(
-    r"C:\Users\Sunlight\Desktop\01-10-26\input.xlsx"
-)
-
-OUTPUT_FILE = Path(
     r"C:\Users\Sunlight\Desktop\01-10-26\output_TELE_CLEANED.xlsx"
 )
 
-PHONE_COLUMNS = ["GSM", "TEL1", "TEL2", "TEL3"]
+OUTPUT_FILE = Path(
+    r"C:\Users\Sunlight\Desktop\01-10-26\output_TELE_DEDUPLICATED.xlsx"
+)
 
 
 # ============================================================
-# 1. READ EXCEL FILE
+# 1. READ FILE
 # ============================================================
 
 if not INPUT_FILE.exists():
@@ -27,173 +25,158 @@ if not INPUT_FILE.exists():
 
 df = pd.read_excel(INPUT_FILE, dtype=object)
 
-# Normalize headers for matching, without changing other headers.
 def normalize_header(value):
     return re.sub(r"\s+", " ", str(value).strip()).upper()
 
-column_lookup = {}
+# Find columns regardless of capitalization or surrounding spaces.
+columns = {
+    normalize_header(col): col
+    for col in df.columns
+}
 
-for column in df.columns:
-    key = normalize_header(column)
-    if key not in column_lookup:
-        column_lookup[key] = column
+if "TELE" not in columns:
+    raise ValueError("Required column TELE was not found.")
 
-# Find available phone columns, allowing variations in case/spaces.
-available_phone_columns = [
-    column_lookup[name]
-    for name in PHONE_COLUMNS
-    if name in column_lookup
-]
+tele_col = columns["TELE"]
+tva_col = columns.get("TVA")
 
-if not available_phone_columns:
-    raise ValueError(
-        "No GSM, TEL1, TEL2 or TEL3 columns found. "
-        f"Available columns: {list(df.columns)}"
-    )
-
-print("Input file:", INPUT_FILE.name)
-print("Phone columns found:", available_phone_columns)
-print("Original rows:", len(df))
+print("Input rows:", len(df))
+print("TELE column:", tele_col)
+print("TVA column:", tva_col if tva_col else "Not found")
 
 
 # ============================================================
-# 2. SPLIT MULTIPLE NUMBERS AND CLEAN PHONE PREFIXES
+# 2. NORMALIZE TELE FOR MATCHING
 # ============================================================
 
-def clean_and_split_phone(value):
-    """
-    Return a list of cleaned phone numbers.
-
-    Splits numbers separated by slash, semicolon, comma,
-    line breaks or other common separators.
-
-    Removes formatting characters and Belgian prefixes:
-    000032, 0032, 32.
-
-    Keeps digits only in each resulting phone number.
-    """
-
+def normalize_phone(value):
     if pd.isna(value):
-        return []
+        return ""
 
-    # Avoid turning Excel numeric values such as 12345.0 into
-    # the phone number 123450.
     if isinstance(value, float) and value.is_integer():
         value = str(int(value))
     else:
         value = str(value).strip()
 
-    if not value or value.lower() in {"nan", "none", "null"}:
-        return []
+    # Compare numbers without spaces, punctuation or prefixes.
+    digits = re.sub(r"\D", "", value)
 
-    # Split on common separators between separate phone numbers.
-    # Do NOT split on spaces or dots: they can be formatting
-    # inside a single phone number.
-    parts = re.split(r"[/;,\n\r|]+", value)
+    if not digits:
+        return ""
 
-    cleaned_numbers = []
+    # Normalize Belgian international prefixes.
+    while True:
+        if digits.startswith("000032"):
+            digits = digits[6:]
+        elif digits.startswith("0032"):
+            digits = digits[4:]
+        elif digits.startswith("32"):
+            digits = digits[2:]
+        else:
+            break
 
-    for part in parts:
-        part = part.strip()
-
-        if not part:
-            continue
-
-        # Keep digits only: removes +, spaces, dots, colons,
-        # hyphens, parentheses and other non-digit characters.
-        digits = re.sub(r"\D", "", part)
-
-        if not digits:
-            continue
-
-        # Remove international prefixes in the correct order.
-        # Repeat to handle values such as 00320032...
-        while True:
-            if digits.startswith("000032"):
-                digits = digits[6:]
-            elif digits.startswith("0032"):
-                digits = digits[4:]
-            elif digits.startswith("32"):
-                digits = digits[2:]
-            else:
-                break
-
-        if digits:
-            cleaned_numbers.append(digits)
-
-    return cleaned_numbers
+    return digits
 
 
-# ============================================================
-# 3. MERGE GSM + TEL1 + TEL2 + TEL3
-#    ONE PHONE NUMBER PER ROW
-# ============================================================
+# Temporary matching key; original TELE values remain unchanged.
+df["_PHONE_KEY"] = df[tele_col].apply(normalize_phone)
 
-# Remove existing TELE column so that we can create a clean one.
-# If a TELE column already exists, its values are not used here.
-tele_existing = [
-    column for column in df.columns
-    if normalize_header(column) == "TELE"
-]
+# Count how many fields contain useful information.
+original_columns = list(df.columns)
+original_columns.remove("_PHONE_KEY")
 
-df = df.drop(columns=tele_existing)
+def is_filled(value):
+    if pd.isna(value):
+        return False
 
-# Keep all non-phone columns in their original order.
-other_columns = [
-    column for column in df.columns
-    if column not in available_phone_columns
-]
+    if isinstance(value, str):
+        return bool(value.strip())
 
-output_columns = other_columns + ["TELE"]
+    return True
 
-records = []
-total_numbers = 0
-rows_without_phone = 0
+df["_INFO_SCORE"] = df[original_columns].apply(
+    lambda row: sum(is_filled(v) for v in row),
+    axis=1
+)
 
-for _, row in df.iterrows():
-
-    # Collect all numbers from the four source columns in order.
-    phone_numbers = []
-
-    for column in available_phone_columns:
-        phone_numbers.extend(clean_and_split_phone(row[column]))
-
-    # Preserve the company row even if no phone number exists.
-    if not phone_numbers:
-        record = {
-            column: row[column]
-            for column in other_columns
-        }
-        record["TELE"] = ""
-        records.append(record)
-        rows_without_phone += 1
-        continue
-
-    # One output row per phone number.
-    # Other company data is copied to every resulting row.
-    for phone in phone_numbers:
-        record = {
-            column: row[column]
-            for column in other_columns
-        }
-        record["TELE"] = phone
-
-        records.append(record)
-        total_numbers += 1
+# TVA is prioritized when the column exists.
+if tva_col:
+    df["_HAS_TVA"] = df[tva_col].apply(is_filled).astype(int)
+else:
+    df["_HAS_TVA"] = 0
 
 
 # ============================================================
-# 4. CREATE OUTPUT DATAFRAME
+# 3. RANK DUPLICATE ROWS
 # ============================================================
 
-result = pd.DataFrame(records, columns=output_columns)
+# Highest priority:
+# 1. Has TVA
+# 2. Has the most populated fields
+# 3. Original row order for ties
 
-# Keep phone numbers as text to preserve leading zeros.
-result["TELE"] = result["TELE"].astype("string")
+df["_ORIGINAL_ORDER"] = range(len(df))
+
+df = df.sort_values(
+    by=["_HAS_TVA", "_INFO_SCORE", "_ORIGINAL_ORDER"],
+    ascending=[False, False, True],
+    kind="stable"
+)
 
 
 # ============================================================
-# 5. EXPORT TO EXCEL
+# 4. MERGE INFORMATION AND DEDUPLICATE BY TELE
+# ============================================================
+
+output_records = []
+removed_duplicates = 0
+blank_phone_rows = 0
+
+# Preserve rows with blank TELE separately.
+blank_phone_rows = int((df["_PHONE_KEY"] == "").sum())
+
+# Never group blank phone numbers together.
+blank_rows = df[df["_PHONE_KEY"] == ""]
+valid_rows = df[df["_PHONE_KEY"] != ""]
+
+# Keep the best row as the base, then fill empty fields
+# using information from the other rows with the same phone.
+for phone_key, group in valid_rows.groupby(
+    "_PHONE_KEY", sort=False
+):
+    group = group.sort_values(
+        by=["_HAS_TVA", "_INFO_SCORE", "_ORIGINAL_ORDER"],
+        ascending=[False, False, True],
+        kind="stable"
+    )
+
+    # Best-ranked row is the main record.
+    merged = group.iloc[0][original_columns].copy()
+
+    # Fill missing values from other duplicate rows.
+    # Existing non-empty values in the best row are retained.
+    for _, other_row in group.iloc[1:].iterrows():
+        for column in original_columns:
+            if not is_filled(merged[column]) and is_filled(
+                other_row[column]
+            ):
+                merged[column] = other_row[column]
+
+    output_records.append(merged)
+    removed_duplicates += len(group) - 1
+
+# Keep all rows without a usable phone number unchanged.
+for _, row in blank_rows.iterrows():
+    output_records.append(row[original_columns].copy())
+
+result = pd.DataFrame(
+    output_records,
+    columns=original_columns
+)
+
+
+# ============================================================
+# 5. EXPORT
 # ============================================================
 
 OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -206,16 +189,16 @@ result.to_excel(
 
 
 # ============================================================
-# 6. SUMMARY
+# 6. REPORT
 # ============================================================
 
 print("\n" + "=" * 50)
-print("CLEANING COMPLETED")
+print("DEDUPLICATION COMPLETED")
 print("=" * 50)
-print("Original rows:", len(df))
+print("Input rows:", len(df))
 print("Output rows:", len(result))
-print("Phone numbers extracted:", total_numbers)
-print("Rows without phone numbers:", rows_without_phone)
-print("Duplicates removed: NO")
-print("Other company columns preserved: YES")
+print("Duplicates removed:", removed_duplicates)
+print("Rows with blank TELE preserved:", blank_phone_rows)
+print("TVA priority:", "Enabled" if tva_col else "TVA column missing")
+print("Missing fields filled from duplicates: Yes")
 print("Output file:", OUTPUT_FILE)
