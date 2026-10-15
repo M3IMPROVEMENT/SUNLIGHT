@@ -1,1 +1,221 @@
-=LET(x;A2&"";TEXTJOIN("";TRUE;IFERROR(MID(x;SEQUENCE(LEN(x));1)*1;"")))
+
+import pandas as pd
+import re
+from pathlib import Path
+
+# ============================================================
+# CONFIGURATION — CHANGE THESE TWO PATHS
+# ============================================================
+
+INPUT_FILE = Path(
+    r"C:\Users\Sunlight\Desktop\01-10-26\input.xlsx"
+)
+
+OUTPUT_FILE = Path(
+    r"C:\Users\Sunlight\Desktop\01-10-26\output_TELE_CLEANED.xlsx"
+)
+
+PHONE_COLUMNS = ["GSM", "TEL1", "TEL2", "TEL3"]
+
+
+# ============================================================
+# 1. READ EXCEL FILE
+# ============================================================
+
+if not INPUT_FILE.exists():
+    raise FileNotFoundError(f"File not found: {INPUT_FILE}")
+
+df = pd.read_excel(INPUT_FILE, dtype=object)
+
+# Normalize headers for matching, without changing other headers.
+def normalize_header(value):
+    return re.sub(r"\s+", " ", str(value).strip()).upper()
+
+column_lookup = {}
+
+for column in df.columns:
+    key = normalize_header(column)
+    if key not in column_lookup:
+        column_lookup[key] = column
+
+# Find available phone columns, allowing variations in case/spaces.
+available_phone_columns = [
+    column_lookup[name]
+    for name in PHONE_COLUMNS
+    if name in column_lookup
+]
+
+if not available_phone_columns:
+    raise ValueError(
+        "No GSM, TEL1, TEL2 or TEL3 columns found. "
+        f"Available columns: {list(df.columns)}"
+    )
+
+print("Input file:", INPUT_FILE.name)
+print("Phone columns found:", available_phone_columns)
+print("Original rows:", len(df))
+
+
+# ============================================================
+# 2. SPLIT MULTIPLE NUMBERS AND CLEAN PHONE PREFIXES
+# ============================================================
+
+def clean_and_split_phone(value):
+    """
+    Return a list of cleaned phone numbers.
+
+    Splits numbers separated by slash, semicolon, comma,
+    line breaks or other common separators.
+
+    Removes formatting characters and Belgian prefixes:
+    000032, 0032, 32.
+
+    Keeps digits only in each resulting phone number.
+    """
+
+    if pd.isna(value):
+        return []
+
+    # Avoid turning Excel numeric values such as 12345.0 into
+    # the phone number 123450.
+    if isinstance(value, float) and value.is_integer():
+        value = str(int(value))
+    else:
+        value = str(value).strip()
+
+    if not value or value.lower() in {"nan", "none", "null"}:
+        return []
+
+    # Split on common separators between separate phone numbers.
+    # Do NOT split on spaces or dots: they can be formatting
+    # inside a single phone number.
+    parts = re.split(r"[/;,\n\r|]+", value)
+
+    cleaned_numbers = []
+
+    for part in parts:
+        part = part.strip()
+
+        if not part:
+            continue
+
+        # Keep digits only: removes +, spaces, dots, colons,
+        # hyphens, parentheses and other non-digit characters.
+        digits = re.sub(r"\D", "", part)
+
+        if not digits:
+            continue
+
+        # Remove international prefixes in the correct order.
+        # Repeat to handle values such as 00320032...
+        while True:
+            if digits.startswith("000032"):
+                digits = digits[6:]
+            elif digits.startswith("0032"):
+                digits = digits[4:]
+            elif digits.startswith("32"):
+                digits = digits[2:]
+            else:
+                break
+
+        if digits:
+            cleaned_numbers.append(digits)
+
+    return cleaned_numbers
+
+
+# ============================================================
+# 3. MERGE GSM + TEL1 + TEL2 + TEL3
+#    ONE PHONE NUMBER PER ROW
+# ============================================================
+
+# Remove existing TELE column so that we can create a clean one.
+# If a TELE column already exists, its values are not used here.
+tele_existing = [
+    column for column in df.columns
+    if normalize_header(column) == "TELE"
+]
+
+df = df.drop(columns=tele_existing)
+
+# Keep all non-phone columns in their original order.
+other_columns = [
+    column for column in df.columns
+    if column not in available_phone_columns
+]
+
+output_columns = other_columns + ["TELE"]
+
+records = []
+total_numbers = 0
+rows_without_phone = 0
+
+for _, row in df.iterrows():
+
+    # Collect all numbers from the four source columns in order.
+    phone_numbers = []
+
+    for column in available_phone_columns:
+        phone_numbers.extend(clean_and_split_phone(row[column]))
+
+    # Preserve the company row even if no phone number exists.
+    if not phone_numbers:
+        record = {
+            column: row[column]
+            for column in other_columns
+        }
+        record["TELE"] = ""
+        records.append(record)
+        rows_without_phone += 1
+        continue
+
+    # One output row per phone number.
+    # Other company data is copied to every resulting row.
+    for phone in phone_numbers:
+        record = {
+            column: row[column]
+            for column in other_columns
+        }
+        record["TELE"] = phone
+
+        records.append(record)
+        total_numbers += 1
+
+
+# ============================================================
+# 4. CREATE OUTPUT DATAFRAME
+# ============================================================
+
+result = pd.DataFrame(records, columns=output_columns)
+
+# Keep phone numbers as text to preserve leading zeros.
+result["TELE"] = result["TELE"].astype("string")
+
+
+# ============================================================
+# 5. EXPORT TO EXCEL
+# ============================================================
+
+OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+result.to_excel(
+    OUTPUT_FILE,
+    index=False,
+    engine="openpyxl"
+)
+
+
+# ============================================================
+# 6. SUMMARY
+# ============================================================
+
+print("\n" + "=" * 50)
+print("CLEANING COMPLETED")
+print("=" * 50)
+print("Original rows:", len(df))
+print("Output rows:", len(result))
+print("Phone numbers extracted:", total_numbers)
+print("Rows without phone numbers:", rows_without_phone)
+print("Duplicates removed: NO")
+print("Other company columns preserved: YES")
+print("Output file:", OUTPUT_FILE)
