@@ -1,4 +1,67 @@
+"""Check TVA and GSM columns of a CSV against KBO Public Search.
+
+Usage: python check_kbo.py            (uses input.csv -> output.csv)
+       python check_kbo.py in.csv out.csv
+Requires: pip install requests beautifulsoup4
+"""
+import csv
+import os
+import re
+import sys
+import time
+
+import requests
+from bs4 import BeautifulSoup
+
+TVA_COL = "TVA"   # 10 digits, BE prefix optional
+GSM_COL = "GSM"
+URL = "https://kbopub.economie.fgov.be/kbopub/toonondernemingps.html"
+
+
+def digits(value):
+    return re.sub(r"\D", "", value or "")
+
+
+def norm_tva(value):
+    d = digits(value)
+    return d.zfill(10) if d else ""
+
+
+def norm_phone(value):
+    d = digits(value)
+    return d[-8:] if d else ""
+
+
+def value_after(lines, label):
+    for i, line in enumerate(lines):
+        if line.lower().startswith(label.lower()):
+            rest = line.split(":", 1)[1].strip() if ":" in line else ""
+            if rest:
+                return rest
+            if i + 1 < len(lines):
+                return lines[i + 1]
+    return ""
+
+
+def fetch_kbo(number):
+    r = requests.get(
+        URL,
+        params={"ondernemingsnummer": number, "lang": "fr"},
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+    text = text.replace("\xa0", " ")
+    lines = [re.sub(r"\s+", " ", l).strip() for l in text.splitlines()]
+    lines = [l for l in lines if l]
+    status = value_after(lines, "Assujettie à la TVA")
+    phone = value_after(lines, "Numéro de téléphone")
+    return status, phone
+
+
 def read_rows(src):
+    """Read a CSV in UTF-8 or Windows encoding, with , or ; separator."""
     text = None
     for enc in ("utf-8-sig", "cp1252", "latin-1"):
         try:
@@ -12,4 +75,59 @@ def read_rows(src):
     except csv.Error:
         dialect = csv.excel
         dialect.delimiter = ";"
-    return list(csv.DictReader(text.splitlines(), dialect=dialect))
+    rows = list(csv.DictReader(text.splitlines(), dialect=dialect))
+    return rows, dialect.delimiter
+
+
+def main(src, dst):
+    if not os.path.exists(src):
+        print(f"File not found: {src}")
+        print("Put your CSV next to this script, or pass its name.")
+        return
+
+    rows, delimiter = read_rows(src)
+
+    if not rows:
+        print("The CSV has no data rows.")
+        return
+
+    print(f"Columns found: {list(rows[0].keys())}")
+    if TVA_COL not in rows[0] or GSM_COL not in rows[0]:
+        print(f"Columns '{TVA_COL}' and/or '{GSM_COL}' not found. "
+              "Change TVA_COL / GSM_COL at the top of the script.")
+        return
+
+    extra = ["kbo_tva_status", "kbo_phone", "tva_ok", "gsm_ok"]
+    fields = list(rows[0].keys()) + extra
+    total = len(rows)
+
+    for n, row in enumerate(rows, 1):
+        tva = norm_tva(row.get(TVA_COL))
+        try:
+            status, phone = fetch_kbo(tva) if tva else ("", "")
+        except Exception as e:
+            status, phone = f"ERREUR: {e}", ""
+        row["kbo_tva_status"] = status
+        row["kbo_phone"] = phone
+        row["tva_ok"] = "oui" if status.lower().startswith("oui") else "non"
+        mine, theirs = norm_phone(row.get(GSM_COL)), norm_phone(phone)
+        row["gsm_ok"] = "oui" if mine and mine == theirs else (
+            "absent KBO" if not theirs else "non"
+        )
+        print(f"[{n}/{total}] TVA {tva or '-'} | KBO status: "
+              f"{status or '-'} | KBO phone: {phone or '-'} | "
+              f"tva_ok={row['tva_ok']} gsm_ok={row['gsm_ok']}")
+        time.sleep(1)
+
+    with open(dst, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=fields, delimiter=delimiter)
+        w.writeheader()
+        w.writerows(rows)
+
+    print(f"Done. Results saved to {dst}")
+
+
+if __name__ == "__main__":
+    src = sys.argv[1] if len(sys.argv) > 1 else "input.csv"
+    dst = sys.argv[2] if len(sys.argv) > 2 else "output.csv"
+    main(src, dst)
