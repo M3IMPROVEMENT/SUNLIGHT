@@ -1,8 +1,8 @@
-import os
 import json
-import sqlite3
 import re
+import sqlite3
 from pathlib import Path
+
 from openpyxl import load_workbook, Workbook
 
 
@@ -12,13 +12,11 @@ from openpyxl import load_workbook, Workbook
 
 INPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\NET\B2B")
 OUTPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\NET\B2B")
+SQLITE_FILE = Path(
+    r"C:\Users\Sunlight\Desktop\NET\B2B\DEDU\deduplication_temp.db"
+)
 
-SQLITE_FILE = Path(r"C:\Users\Sunlight\Desktop\NET\B2B\DEDU\deduplication_temp.db")
-
-# Rows processed at once
 CHUNK_SIZE = 100_000
-
-# Maximum DATA rows in each output Excel file
 MAX_OUTPUT_ROWS = 1_000_000
 
 TELE_COLUMN = "TELEPHONE"
@@ -30,7 +28,6 @@ TVA_COLUMN = "TVA"
 # ============================================================
 
 def is_empty(value):
-
     if value is None:
         return True
 
@@ -41,30 +38,26 @@ def is_empty(value):
 
 
 def clean_text(value):
-
     if value is None:
         return ""
 
-    if isinstance(value, float):
-
-        if value.is_integer():
-            return str(int(value))
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
 
     return str(value).strip()
 
 
 # ============================================================
-# TELEPHONE CLEANING
+# TELEPHONE NORMALIZATION
 # ============================================================
 
 def normalize_tele(value):
-
     if is_empty(value):
         return ""
 
     value = clean_text(value)
 
-    # Remove Excel .0
+    # Remove Excel decimal suffix
     if value.endswith(".0"):
         value = value[:-2]
 
@@ -74,19 +67,19 @@ def normalize_tele(value):
     if not digits:
         return ""
 
-    # 0032XXXXXXXXX
+    # International Belgian prefix
     if digits.startswith("0032"):
         digits = "32" + digits[4:]
 
-    # 32XXXXXXXXX
+    # Convert international prefix to Belgian local format
     if digits.startswith("32"):
         digits = "0" + digits[2:]
 
-    # Already Belgian local format
+    # Already starts with zero
     if digits.startswith("0"):
         return digits
 
-    # 9 digits without leading 0
+    # Nine digits without leading zero
     if len(digits) == 9:
         return "0" + digits
 
@@ -94,146 +87,101 @@ def normalize_tele(value):
 
 
 # ============================================================
-# TVA
+# TVA CHECK
 # ============================================================
 
 def has_tva(value):
-
     if is_empty(value):
         return False
 
     value = clean_text(value).upper()
-
     value = re.sub(r"\s+", "", value)
 
-    if value in {"", "NONE", "NAN", "NULL"}:
-        return False
-
-    return True
+    return value not in {"", "NONE", "NAN", "NULL"}
 
 
 # ============================================================
-# COUNT INFORMATION IN ROW
+# ROW COMPLETENESS
 # ============================================================
 
 def row_score(row):
-
-    return sum(
-        not is_empty(value)
-        for value in row
-    )
+    return sum(not is_empty(value) for value in row)
 
 
 # ============================================================
-# MERGE DUPLICATES
+# MERGE DUPLICATE ROWS
 # ============================================================
 
 def merge_rows(old_row, new_row, headers):
 
-    tva_index = None
+    tva_index = next(
+        (
+            i for i, header in enumerate(headers)
+            if str(header).strip().upper() == TVA_COLUMN
+        ),
+        None
+    )
 
-    for i, header in enumerate(headers):
+    old_has_tva = (
+        tva_index is not None
+        and has_tva(old_row[tva_index])
+    )
 
-        if str(header).strip().upper() == TVA_COLUMN.upper():
-            tva_index = i
-            break
-
-    old_has_tva = False
-    new_has_tva = False
-
-    if tva_index is not None:
-
-        old_has_tva = has_tva(old_row[tva_index])
-        new_has_tva = has_tva(new_row[tva_index])
+    new_has_tva = (
+        tva_index is not None
+        and has_tva(new_row[tva_index])
+    )
 
     old_score = row_score(old_row)
     new_score = row_score(new_row)
 
-    # --------------------------------------------------------
-    # DECIDE WHICH ROW HAS PRIORITY
-    # --------------------------------------------------------
-
+    # Select the primary row
     if new_has_tva and not old_has_tva:
-
         primary = new_row
         secondary = old_row
-
-        decision = "KEEP NEW - TVA"
 
     elif old_has_tva and not new_has_tva:
-
         primary = old_row
         secondary = new_row
 
-        decision = "KEEP OLD - TVA"
-
     elif new_score > old_score:
-
         primary = new_row
         secondary = old_row
 
-        decision = "KEEP NEW - MORE COMPLETE"
-
     else:
-
         primary = old_row
         secondary = new_row
 
-        decision = "KEEP OLD - MORE COMPLETE"
-
-    # --------------------------------------------------------
-    # MERGE EMPTY CELLS
-    # --------------------------------------------------------
-
+    # Fill empty cells from the secondary row
     merged = list(primary)
 
     for i in range(len(merged)):
-
-        if (
-            is_empty(merged[i])
-            and not is_empty(secondary[i])
-        ):
+        if is_empty(merged[i]) and not is_empty(secondary[i]):
             merged[i] = secondary[i]
 
-    return merged, decision
+    return merged
 
 
 # ============================================================
 # SQLITE DATABASE
+# No duplicate audit table
 # ============================================================
 
 def create_database():
 
+    SQLITE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    # Remove the previous temporary database
     if SQLITE_FILE.exists():
         SQLITE_FILE.unlink()
 
-    conn = sqlite3.connect(
-        SQLITE_FILE
-    )
+    conn = sqlite3.connect(SQLITE_FILE)
 
-    cursor = conn.cursor()
-
-    # Main deduplication table
-    cursor.execute("""
+    conn.execute("""
         CREATE TABLE records (
             tele_key TEXT PRIMARY KEY,
             row_data TEXT NOT NULL,
             source_file TEXT NOT NULL
-        )
-    """)
-
-    # Duplicate audit table
-    cursor.execute("""
-        CREATE TABLE duplicate_audit (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tele TEXT,
-            old_tva TEXT,
-            new_tva TEXT,
-            decision TEXT,
-            old_file TEXT,
-            new_file TEXT,
-            old_row TEXT,
-            new_row TEXT
         )
     """)
 
@@ -243,111 +191,73 @@ def create_database():
 
 
 # ============================================================
-# PROCESS CHUNK
+# PROCESS ONE CHUNK
 # ============================================================
 
-def process_chunk(
-    rows,
-    headers,
-    conn,
-    source_file,
-    empty_counter
-):
+def process_chunk(rows, headers, conn, source_file, empty_counter):
 
     cursor = conn.cursor()
 
-    inserted = 0
-    duplicates = 0
-
-    # Find TELE
-    tele_index = None
-
-    for i, header in enumerate(headers):
-
-        if str(header).strip().upper() == TELE_COLUMN.upper():
-
-            tele_index = i
-            break
+    tele_index = next(
+        (
+            i for i, header in enumerate(headers)
+            if str(header).strip().upper() == TELE_COLUMN
+        ),
+        None
+    )
 
     if tele_index is None:
-
         raise ValueError(
-            f"Column '{TELE_COLUMN}' not found."
+            f"Column '{TELE_COLUMN}' not found in {source_file}"
         )
 
-    # Find TVA
-    tva_index = None
+    tva_index = next(
+        (
+            i for i, header in enumerate(headers)
+            if str(header).strip().upper() == TVA_COLUMN
+        ),
+        None
+    )
 
-    for i, header in enumerate(headers):
-
-        if str(header).strip().upper() == TVA_COLUMN.upper():
-
-            tva_index = i
-            break
+    inserted = 0
+    duplicates = 0
 
     for row in rows:
 
         row = list(row)
 
-        # Fix number of columns
+        # Ensure every row has the expected number of columns
         if len(row) < len(headers):
-
-            row.extend(
-                [""] * (len(headers) - len(row))
-            )
+            row.extend([""] * (len(headers) - len(row)))
 
         elif len(row) > len(headers):
-
             row = row[:len(headers)]
 
-        # ----------------------------------------------------
-        # NORMALIZE TELE
-        # ----------------------------------------------------
+        # Normalize the telephone used as the deduplication key
+        tele_key = normalize_tele(row[tele_index])
 
-        tele_original = row[tele_index]
-
-        tele_key = normalize_tele(
-            tele_original
-        )
-
-        # ----------------------------------------------------
-        # EMPTY TELE
-        # ----------------------------------------------------
-
+        # Keep rows with empty telephones; do not deduplicate them
         if not tele_key:
-
             empty_counter[0] += 1
 
-            unique_key = (
-                f"__EMPTY_TELE__"
-                f"{empty_counter[0]}"
-            )
+            unique_key = f"__EMPTY_TELE__{empty_counter[0]}"
 
             cursor.execute(
                 """
-                INSERT INTO records
-                (tele_key, row_data, source_file)
+                INSERT INTO records (tele_key, row_data, source_file)
                 VALUES (?, ?, ?)
                 """,
                 (
                     unique_key,
-                    json.dumps(
-                        row,
-                        ensure_ascii=False,
-                        default=str
-                    ),
+                    json.dumps(row, ensure_ascii=False, default=str),
                     source_file
                 )
             )
 
             inserted += 1
-
             continue
 
-        # ----------------------------------------------------
-        # CHECK EXISTING TELE
-        # ----------------------------------------------------
-
+        # Find an existing record with the same normalized telephone
         cursor.execute(
             """
             SELECT row_data, source_file
@@ -359,115 +269,54 @@ def process_chunk(
 
         result = cursor.fetchone()
 
-        # ----------------------------------------------------
-        # NEW TELE
-        # ----------------------------------------------------
-
+        # No duplicate: insert a new record
         if result is None:
 
             cursor.execute(
                 """
-                INSERT INTO records
-                (tele_key, row_data, source_file)
+                INSERT INTO records (tele_key, row_data, source_file)
                 VALUES (?, ?, ?)
                 """,
                 (
                     tele_key,
-                    json.dumps(
-                        row,
-                        ensure_ascii=False,
-                        default=str
-                    ),
+                    json.dumps(row, ensure_ascii=False, default=str),
                     source_file
                 )
             )
 
             inserted += 1
-
             continue
 
-        # ----------------------------------------------------
-        # DUPLICATE
-        # ----------------------------------------------------
-
+        # Duplicate found: merge it into the existing record
         duplicates += 1
 
-        old_row = json.loads(
-            result[0]
-        )
-
+        old_row = json.loads(result[0])
         old_source_file = result[1]
 
-        # ----------------------------------------------------
-        # TVA VALUES FOR AUDIT
-        # ----------------------------------------------------
+        merged_row = merge_rows(old_row, row, headers)
 
-        old_tva = ""
-
-        new_tva = ""
-
-        if tva_index is not None:
-
-            old_tva = clean_text(
-                old_row[tva_index]
-            )
-
-            new_tva = clean_text(
-                row[tva_index]
-            )
-
-        # ----------------------------------------------------
-        # MERGE
-        # ----------------------------------------------------
-
-        merged_row, decision = merge_rows(
-            old_row,
-            row,
-            headers
+        # Keep the source filename of the row that takes priority
+        old_has_tva = (
+            tva_index is not None
+            and has_tva(old_row[tva_index])
         )
 
-        # ----------------------------------------------------
-        # SAVE AUDIT
-        # ----------------------------------------------------
-
-        cursor.execute(
-            """
-            INSERT INTO duplicate_audit
-            (
-                tele,
-                old_tva,
-                new_tva,
-                decision,
-                old_file,
-                new_file,
-                old_row,
-                new_row
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                tele_key,
-                old_tva,
-                new_tva,
-                decision,
-                old_source_file,
-                source_file,
-                json.dumps(
-                    old_row,
-                    ensure_ascii=False,
-                    default=str
-                ),
-                json.dumps(
-                    row,
-                    ensure_ascii=False,
-                    default=str
-                )
-            )
+        new_has_tva = (
+            tva_index is not None
+            and has_tva(row[tva_index])
         )
 
-        # ----------------------------------------------------
-        # UPDATE MAIN RECORD
-        # ----------------------------------------------------
+        if new_has_tva and not old_has_tva:
+            final_source_file = source_file
+
+        elif old_has_tva and not new_has_tva:
+            final_source_file = old_source_file
+
+        elif row_score(row) > row_score(old_row):
+            final_source_file = source_file
+
+        else:
+            final_source_file = old_source_file
 
         cursor.execute(
             """
@@ -482,9 +331,7 @@ def process_chunk(
                     ensure_ascii=False,
                     default=str
                 ),
-                source_file
-                if decision.startswith("KEEP NEW")
-                else old_source_file,
+                final_source_file,
                 tele_key
             )
         )
@@ -495,21 +342,14 @@ def process_chunk(
 
 
 # ============================================================
-# PROCESS EXCEL FILE
+# PROCESS ONE EXCEL FILE
 # ============================================================
 
-def process_excel_file(
-    file_path,
-    conn,
-    headers_reference,
-    empty_counter
-):
+def process_excel_file(file_path, conn, headers_reference, empty_counter):
 
     print()
     print("=" * 70)
-    print(
-        f"PROCESSING: {file_path.name}"
-    )
+    print(f"PROCESSING: {file_path.name}")
     print("=" * 70)
 
     wb = load_workbook(
@@ -518,88 +358,70 @@ def process_excel_file(
         data_only=True
     )
 
-    ws = wb.active
-
-    rows_iterator = ws.iter_rows(
-        values_only=True
-    )
-
-    # --------------------------------------------------------
-    # HEADER
-    # --------------------------------------------------------
-
     try:
+        ws = wb.active
+        rows_iterator = ws.iter_rows(values_only=True)
 
-        headers = list(
-            next(rows_iterator)
-        )
+        try:
+            headers = [clean_text(h) for h in next(rows_iterator)]
+        except StopIteration:
+            print("Empty workbook: skipped.")
+            return headers_reference
 
-    except StopIteration:
+        header_upper = [
+            str(h).strip().upper() for h in headers
+        ]
 
-        wb.close()
-
-        return headers_reference
-
-    headers = [
-        clean_text(h)
-        for h in headers
-    ]
-
-    # --------------------------------------------------------
-    # CHECK TELE
-    # --------------------------------------------------------
-
-    header_upper = [
-        str(h).strip().upper()
-        for h in headers
-    ]
-
-    if TELE_COLUMN.upper() not in header_upper:
-
-        wb.close()
-
-        raise ValueError(
-            f"\n'{TELE_COLUMN}' column not found "
-            f"in {file_path.name}\n\n"
-            f"Available columns:\n{headers}"
-        )
-
-    # --------------------------------------------------------
-    # FIRST FILE DEFINES COLUMNS
-    # --------------------------------------------------------
-
-    if headers_reference is None:
-
-        headers_reference = headers
-
-    else:
-
-        if headers != headers_reference:
-
-            wb.close()
-
+        if TELE_COLUMN not in header_upper:
             raise ValueError(
-                f"\nColumn structure differs in "
-                f"{file_path.name}.\n\n"
-                f"Expected:\n{headers_reference}\n\n"
-                f"Found:\n{headers}"
+                f"Column '{TELE_COLUMN}' not found in {file_path.name}.\n"
+                f"Available columns: {headers}"
             )
 
-    # --------------------------------------------------------
-    # CHUNK PROCESSING
-    # --------------------------------------------------------
+        # First non-empty file defines the column structure
+        if headers_reference is None:
+            headers_reference = headers
 
-    chunk = []
+        elif headers != headers_reference:
+            raise ValueError(
+                f"Column structure differs in {file_path.name}.\n"
+                f"Expected: {headers_reference}\n"
+                f"Found: {headers}"
+            )
 
-    total_rows = 0
-    total_inserted = 0
-    total_duplicates = 0
+        chunk = []
 
-    for row in rows_iterator:
+        total_rows = 0
+        total_inserted = 0
+        total_duplicates = 0
 
-        chunk.append(row)
+        for row in rows_iterator:
 
-        if len(chunk) >= CHUNK_SIZE:
+            chunk.append(row)
+
+            if len(chunk) >= CHUNK_SIZE:
+
+                inserted, duplicates = process_chunk(
+                    chunk,
+                    headers_reference,
+                    conn,
+                    file_path.name,
+                    empty_counter
+                )
+
+                total_rows += len(chunk)
+                total_inserted += inserted
+                total_duplicates += duplicates
+
+                print(
+                    f"Processed: {total_rows:,} rows | "
+                    f"Duplicates merged: {total_duplicates:,}"
+                )
+
+                chunk = []
+
+        # Process the final partial chunk
+        if chunk:
 
             inserted, duplicates = process_chunk(
                 chunk,
@@ -610,538 +432,193 @@ def process_excel_file(
             )
 
             total_rows += len(chunk)
-
             total_inserted += inserted
-
             total_duplicates += duplicates
 
-            print(
-                f"Processed: {total_rows:,} rows | "
-                f"Duplicates found: "
-                f"{total_duplicates:,}"
-            )
+        print(f"\nFinished: {file_path.name}")
+        print(f"Rows processed: {total_rows:,}")
+        print(f"New records: {total_inserted:,}")
+        print(f"Duplicates merged: {total_duplicates:,}")
 
-            chunk = []
+        return headers_reference
 
-    # --------------------------------------------------------
-    # LAST CHUNK
-    # --------------------------------------------------------
-
-    if chunk:
-
-        inserted, duplicates = process_chunk(
-            chunk,
-            headers_reference,
-            conn,
-            file_path.name,
-            empty_counter
-        )
-
-        total_rows += len(chunk)
-
-        total_inserted += inserted
-
-        total_duplicates += duplicates
-
-    wb.close()
-
-    print()
-    print(
-        f"Finished: {file_path.name}"
-    )
-
-    print(
-        f"Rows processed: {total_rows:,}"
-    )
-
-    print(
-        f"New records: {total_inserted:,}"
-    )
-
-    print(
-        f"Duplicates found: {total_duplicates:,}"
-    )
-
-    return headers_reference
+    finally:
+        wb.close()
 
 
 # ============================================================
-# EXPORT MAIN RESULTS
+# EXPORT FINAL DEDUPLICATED RESULTS
 # ============================================================
 
-def export_main_results(
-    conn,
-    headers
-):
+def export_main_results(conn, headers):
 
-    OUTPUT_FOLDER.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
     cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT row_data
-        FROM records
-    """)
+    cursor.execute("SELECT row_data FROM records")
 
     output_number = 1
-
     rows_in_file = 0
-
     total_exported = 0
-
-    wb = None
-    ws = None
-    output_file = None
 
     def create_workbook(number):
 
-        filename = (
-            OUTPUT_FOLDER /
+        filename = OUTPUT_FOLDER / (
             f"deduplicated_part_{number:02d}.xlsx"
         )
 
-        workbook = Workbook(
-            write_only=True
-        )
-
-        worksheet = workbook.create_sheet(
-            "Data"
-        )
-
+        workbook = Workbook(write_only=True)
+        worksheet = workbook.create_sheet("Data")
         worksheet.append(headers)
 
-        return (
-            workbook,
-            worksheet,
-            filename
-        )
+        return workbook, worksheet, filename
 
-    wb, ws, output_file = create_workbook(
-        output_number
-    )
+    wb, ws, output_file = create_workbook(output_number)
 
     print()
     print("=" * 70)
     print("EXPORTING FINAL RESULTS")
     print("=" * 70)
 
-    for result in cursor:
+    try:
+        for result in cursor:
 
-        row = json.loads(
-            result[0]
-        )
+            row = json.loads(result[0])
 
-        if rows_in_file >= MAX_OUTPUT_ROWS:
+            # Start a new workbook after reaching the data-row limit
+            if rows_in_file >= MAX_OUTPUT_ROWS:
 
-            wb.save(output_file)
+                wb.save(output_file)
 
-            print(
-                f"Created: {output_file.name} "
-                f"({rows_in_file:,} rows)"
-            )
+                print(
+                    f"Created: {output_file.name} "
+                    f"({rows_in_file:,} data rows)"
+                )
 
-            output_number += 1
+                output_number += 1
+                wb, ws, output_file = create_workbook(output_number)
+                rows_in_file = 0
 
-            wb, ws, output_file = create_workbook(
-                output_number
-            )
+            ws.append(row)
 
-            rows_in_file = 0
+            rows_in_file += 1
+            total_exported += 1
 
-        ws.append(row)
+            if total_exported % 100_000 == 0:
+                print(f"Exported: {total_exported:,} rows")
 
-        rows_in_file += 1
-
-        total_exported += 1
-
-        if total_exported % 100_000 == 0:
-
-            print(
-                f"Exported: "
-                f"{total_exported:,} rows"
-            )
-
-    if wb is not None:
-
+        # Save the final workbook
         wb.save(output_file)
 
         print(
             f"Created: {output_file.name} "
-            f"({rows_in_file:,} rows)"
+            f"({rows_in_file:,} data rows)"
         )
 
-    print()
-    print(
-        f"TOTAL FINAL ROWS: "
-        f"{total_exported:,}"
-    )
+    except Exception:
+        # Do not leave an open workbook if export fails
+        raise
 
-    print(
-        f"OUTPUT FILES: "
-        f"{output_number}"
-    )
+    print()
+    print(f"TOTAL FINAL ROWS: {total_exported:,}")
+    print(f"OUTPUT FILES: {output_number}")
 
 
 # ============================================================
-# EXPORT DUPLICATE AUDIT
+# FIND INPUT FILES
+# Excludes previous outputs and temporary Excel lock files
 # ============================================================
 
-def export_duplicate_audit(
-    conn,
-    headers
-):
+def get_input_files():
 
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT
-            tele,
-            old_tva,
-            new_tva,
-            decision,
-            old_file,
-            new_file,
-            old_row,
-            new_row
-        FROM duplicate_audit
-        ORDER BY id
-    """)
-
-    # --------------------------------------------------------
-    # AUDIT COLUMNS
-    # --------------------------------------------------------
-
-    audit_headers = [
-        "TELE",
-        "OLD_TVA",
-        "NEW_TVA",
-        "DECISION",
-        "OLD_FILE",
-        "NEW_FILE"
-    ]
-
-    # Add old/new column names
-    for header in headers:
-
-        audit_headers.append(
-            f"OLD_{header}"
+    if not INPUT_FOLDER.exists():
+        raise FileNotFoundError(
+            f"Input folder does not exist: {INPUT_FOLDER}"
         )
 
-    for header in headers:
+    files = []
 
-        audit_headers.append(
-            f"NEW_{header}"
-        )
+    for path in INPUT_FOLDER.iterdir():
 
-    audit_number = 1
+        if not path.is_file():
+            continue
 
-    rows_in_file = 0
+        if path.name.startswith("~$"):
+            continue
 
-    total_audits = 0
+        if path.stem.lower().startswith("deduplicated_part_"):
+            continue
 
-    wb = None
-    ws = None
-    audit_file = None
+        if path.suffix.lower() in {".xlsx", ".xlsm"}:
+            files.append(path)
 
-    def create_audit_workbook(number):
-
-        filename = (
-            OUTPUT_FOLDER /
-            f"DUPLICATES_AUDIT_part_{number:02d}.xlsx"
-        )
-
-        workbook = Workbook(
-            write_only=True
-        )
-
-        worksheet = workbook.create_sheet(
-            "Duplicates"
-        )
-
-        worksheet.append(
-            audit_headers
-        )
-
-        return (
-            workbook,
-            worksheet,
-            filename
-        )
-
-    # --------------------------------------------------------
-    # Create first audit file
-    # --------------------------------------------------------
-
-    wb, ws, audit_file = create_audit_workbook(
-        audit_number
-    )
-
-    print()
-    print("=" * 70)
-    print("EXPORTING DUPLICATE AUDIT")
-    print("=" * 70)
-
-    for result in cursor:
-
-        (
-            tele,
-            old_tva,
-            new_tva,
-            decision,
-            old_file,
-            new_file,
-            old_row_json,
-            new_row_json
-        ) = result
-
-        old_row = json.loads(
-            old_row_json
-        )
-
-        new_row = json.loads(
-            new_row_json
-        )
-
-        # ----------------------------------------------------
-        # Split audit files at 1M rows
-        # ----------------------------------------------------
-
-        if rows_in_file >= MAX_OUTPUT_ROWS:
-
-            wb.save(audit_file)
-
-            print(
-                f"Created: {audit_file.name} "
-                f"({rows_in_file:,} duplicates)"
-            )
-
-            audit_number += 1
-
-            wb, ws, audit_file = create_audit_workbook(
-                audit_number
-            )
-
-            rows_in_file = 0
-
-        audit_row = [
-            tele,
-            old_tva,
-            new_tva,
-            decision,
-            old_file,
-            new_file
-        ]
-
-        audit_row.extend(
-            old_row
-        )
-
-        audit_row.extend(
-            new_row
-        )
-
-        ws.append(
-            audit_row
-        )
-
-        rows_in_file += 1
-
-        total_audits += 1
-
-        if total_audits % 100_000 == 0:
-
-            print(
-                f"Audits exported: "
-                f"{total_audits:,}"
-            )
-
-    # --------------------------------------------------------
-    # Save final audit file
-    # --------------------------------------------------------
-
-    if wb is not None:
-
-        wb.save(audit_file)
-
-        print(
-            f"Created: {audit_file.name} "
-            f"({rows_in_file:,} duplicates)"
-        )
-
-    print()
-    print(
-        f"TOTAL DUPLICATES AUDITED: "
-        f"{total_audits:,}"
-    )
-
-    print(
-        f"AUDIT FILES: "
-        f"{audit_number}"
-    )
+    return sorted(files, key=lambda p: p.name.lower())
 
 
 # ============================================================
-# MAIN
+# MAIN PROGRAM
 # ============================================================
 
 def main():
 
     print("=" * 70)
-    print(
-        "LARGE EXCEL INTELLIGENT DEDUPLICATION"
-    )
+    print("TELEPHONE DEDUPLICATION AND ROW MERGING")
     print("=" * 70)
 
-    # --------------------------------------------------------
-    # Check INPUT
-    # --------------------------------------------------------
+    print(f"Input folder: {INPUT_FOLDER}")
+    print(f"Output folder: {OUTPUT_FOLDER}")
+    print("Duplicate audit: DISABLED")
+    print("Deduplication key: TELEPHONE")
+    print("Priority: TVA, then row completeness")
 
-    if not INPUT_FOLDER.exists():
-
-        print()
-        print(
-            "ERROR: INPUT folder does not exist:"
-        )
-
-        print(INPUT_FOLDER)
-
-        return
-
-    # --------------------------------------------------------
-    # Find files
-    # --------------------------------------------------------
-
-    files = sorted(
-        [
-            f
-            for f in INPUT_FOLDER.iterdir()
-            if f.is_file()
-            and f.suffix.lower() == ".xlsx"
-            and not f.name.startswith("~$")
-        ]
-    )
+    files = get_input_files()
 
     if not files:
-
-        print()
-        print(
-            "No Excel files found."
-        )
-
+        print("\nNo Excel input files found.")
         return
 
-    print()
-    print(
-        f"Found {len(files)} Excel files:"
-    )
+    print(f"\nExcel files found: {len(files):,}")
 
-    for file in files:
-
-        print(
-            f"  - {file.name}"
-        )
-
-    # --------------------------------------------------------
-    # Create SQLite
-    # --------------------------------------------------------
-
-    print()
-    print(
-        "Creating SQLite database..."
-    )
-
-    conn = create_database()
-
-    headers = None
-
-    # Counter for empty TELE rows
-    empty_counter = [0]
+    conn = None
 
     try:
+        conn = create_database()
 
-        # ====================================================
-        # PROCESS FILES
-        # ====================================================
+        headers_reference = None
+        empty_counter = [0]
 
-        for file_path in files:
+        total_files = len(files)
 
-            headers = process_excel_file(
+        for index, file_path in enumerate(files, start=1):
+
+            print(f"\nFILE {index:,} OF {total_files:,}")
+
+            headers_reference = process_excel_file(
                 file_path,
                 conn,
-                headers,
+                headers_reference,
                 empty_counter
             )
 
-        # ====================================================
-        # EXPORT FINAL DATA
-        # ====================================================
+        if headers_reference is None:
+            print("No usable Excel files found.")
+            return
 
-        export_main_results(
-            conn,
-            headers
-        )
+        # Export only the final deduplicated results
+        export_main_results(conn, headers_reference)
 
-        # ====================================================
-        # EXPORT AUDIT
-        # ====================================================
-
-        export_duplicate_audit(
-            conn,
-            headers
-        )
-
-        print()
-        print("=" * 70)
-        print("SUCCESS")
+        print("\n" + "=" * 70)
+        print("PROCESS COMPLETED SUCCESSFULLY")
         print("=" * 70)
 
-    except Exception as e:
-
-        print()
-        print("=" * 70)
-        print("ERROR")
-        print("=" * 70)
-
-        print(e)
-
-        raise
+        print(f"Files processed: {total_files:,}")
+        print(f"Empty TELEPHONE rows preserved: {empty_counter[0]:,}")
+        print(f"Results saved in: {OUTPUT_FOLDER}")
 
     finally:
+        if conn is not None:
+            conn.close()
 
-        conn.close()
-
-        # ----------------------------------------------------
-        # Remove temporary SQLite
-        # ----------------------------------------------------
-
-        if SQLITE_FILE.exists():
-
-            try:
-
-                SQLITE_FILE.unlink()
-
-                print()
-                print(
-                    "Temporary SQLite database deleted."
-                )
-
-            except Exception as e:
-
-                print()
-                print(
-                    "WARNING: Could not delete "
-                    "temporary SQLite database."
-                )
-
-                print(e)
-
-
-# ============================================================
-# RUN
-# ============================================================
 
 if __name__ == "__main__":
     main()
