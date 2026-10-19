@@ -1,9 +1,11 @@
 """Check TVA and GSM columns of a CSV against KBO Public Search.
 
-Usage: python check_kbo.py input.csv output.csv
+Usage: python check_kbo.py            (uses input.csv -> output.csv)
+       python check_kbo.py in.csv out.csv
 Requires: pip install requests beautifulsoup4
 """
 import csv
+import os
 import re
 import sys
 import time
@@ -50,20 +52,38 @@ def fetch_kbo(number):
     )
     r.raise_for_status()
     text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    text = text.replace("\xa0", " ")
+    lines = [re.sub(r"\s+", " ", l).strip() for l in text.splitlines()]
+    lines = [l for l in lines if l]
     status = value_after(lines, "Assujettie à la TVA")
     phone = value_after(lines, "Numéro de téléphone")
     return status, phone
 
 
 def main(src, dst):
+    if not os.path.exists(src):
+        print(f"File not found: {src}")
+        print("Put your CSV next to this script, or pass its name.")
+        return
+
     with open(src, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
 
+    if not rows:
+        print("The CSV has no data rows.")
+        return
+
+    print(f"Columns found: {list(rows[0].keys())}")
+    if TVA_COL not in rows[0] or GSM_COL not in rows[0]:
+        print(f"Columns '{TVA_COL}' and/or '{GSM_COL}' not found. "
+              "Change TVA_COL / GSM_COL at the top of the script.")
+        return
+
     extra = ["kbo_tva_status", "kbo_phone", "tva_ok", "gsm_ok"]
     fields = list(rows[0].keys()) + extra
+    total = len(rows)
 
-    for row in rows:
+    for n, row in enumerate(rows, 1):
         tva = norm_tva(row.get(TVA_COL))
         try:
             status, phone = fetch_kbo(tva) if tva else ("", "")
@@ -76,7 +96,9 @@ def main(src, dst):
         row["gsm_ok"] = "oui" if mine and mine == theirs else (
             "absent KBO" if not theirs else "non"
         )
-        print(tva, row["tva_ok"], row["gsm_ok"])
+        print(f"[{n}/{total}] TVA {tva or '-'} | KBO status: "
+              f"{status or '-'} | KBO phone: {phone or '-'} | "
+              f"tva_ok={row['tva_ok']} gsm_ok={row['gsm_ok']}")
         time.sleep(1)
 
     with open(dst, "w", newline="", encoding="utf-8-sig") as f:
@@ -84,6 +106,10 @@ def main(src, dst):
         w.writeheader()
         w.writerows(rows)
 
+    print(f"Done. Results saved to {dst}")
+
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    src = sys.argv[1] if len(sys.argv) > 1 else "input.csv"
+    dst = sys.argv[2] if len(sys.argv) > 2 else "output.csv"
+    main(src, dst)
