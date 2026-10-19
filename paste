@@ -1,10 +1,9 @@
-"""Check TVA and GSM columns of a CSV against KBO Public Search.
+"""Check TVA and GSM columns of an Excel file against KBO Public Search.
 
-Usage: python check_kbo.py            (uses input.csv -> output.csv)
-       python check_kbo.py in.csv out.csv
-Requires: pip install requests beautifulsoup4
+Usage: python check_kbo.py            (uses input.xlsx -> output.xlsx)
+       python check_kbo.py in.xlsx out.xlsx
+Requires: pip install requests beautifulsoup4 openpyxl
 """
-import csv
 import os
 import re
 import sys
@@ -12,14 +11,23 @@ import time
 
 import requests
 from bs4 import BeautifulSoup
+from openpyxl import load_workbook
 
-TVA_COL = "TVA"   # 10 digits, BE prefix optional
-GSM_COL = "GSM"
+TVA_COL = "TVA"   # header name of the TVA column (10 digits, BE optional)
+GSM_COL = "GSM"   # header name of the GSM column
 URL = "https://kbopub.economie.fgov.be/kbopub/toonondernemingps.html"
 
 
+def to_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return str(value)
+
+
 def digits(value):
-    return re.sub(r"\D", "", value or "")
+    return re.sub(r"\D", "", to_text(value))
 
 
 def norm_tva(value):
@@ -60,74 +68,63 @@ def fetch_kbo(number):
     return status, phone
 
 
-def read_rows(src):
-    """Read a CSV in UTF-8 or Windows encoding, with , or ; separator."""
-    text = None
-    for enc in ("utf-8-sig", "cp1252", "latin-1"):
-        try:
-            with open(src, newline="", encoding=enc) as f:
-                text = f.read()
-            break
-        except UnicodeDecodeError:
-            continue
-    try:
-        dialect = csv.Sniffer().sniff(text[:2000], delimiters=";,\t")
-    except csv.Error:
-        dialect = csv.excel
-        dialect.delimiter = ";"
-    rows = list(csv.DictReader(text.splitlines(), dialect=dialect))
-    return rows, dialect.delimiter
-
-
 def main(src, dst):
     if not os.path.exists(src):
         print(f"File not found: {src}")
-        print("Put your CSV next to this script, or pass its name.")
+        print("Put your Excel file next to this script, or pass its name.")
         return
 
-    rows, delimiter = read_rows(src)
+    wb = load_workbook(src)
+    ws = wb.active
 
-    if not rows:
-        print("The CSV has no data rows.")
-        return
-
-    print(f"Columns found: {list(rows[0].keys())}")
-    if TVA_COL not in rows[0] or GSM_COL not in rows[0]:
+    headers = [to_text(c.value).strip() for c in ws[1]]
+    print(f"Columns found: {headers}")
+    lower = [h.lower() for h in headers]
+    if TVA_COL.lower() not in lower or GSM_COL.lower() not in lower:
         print(f"Columns '{TVA_COL}' and/or '{GSM_COL}' not found. "
               "Change TVA_COL / GSM_COL at the top of the script.")
         return
 
-    extra = ["kbo_tva_status", "kbo_phone", "tva_ok", "gsm_ok"]
-    fields = list(rows[0].keys()) + extra
-    total = len(rows)
+    tva_idx = lower.index(TVA_COL.lower()) + 1
+    gsm_idx = lower.index(GSM_COL.lower()) + 1
 
-    for n, row in enumerate(rows, 1):
-        tva = norm_tva(row.get(TVA_COL))
+    # New columns after the last used column
+    first_new = ws.max_column + 1
+    for offset, name in enumerate(
+        ["kbo_tva_status", "kbo_phone", "tva_ok", "gsm_ok"]
+    ):
+        ws.cell(row=1, column=first_new + offset, value=name)
+
+    total = ws.max_row - 1
+    for r in range(2, ws.max_row + 1):
+        tva = norm_tva(ws.cell(row=r, column=tva_idx).value)
+        gsm = ws.cell(row=r, column=gsm_idx).value
         try:
             status, phone = fetch_kbo(tva) if tva else ("", "")
         except Exception as e:
             status, phone = f"ERREUR: {e}", ""
-        row["kbo_tva_status"] = status
-        row["kbo_phone"] = phone
-        row["tva_ok"] = "oui" if status.lower().startswith("oui") else "non"
-        mine, theirs = norm_phone(row.get(GSM_COL)), norm_phone(phone)
-        row["gsm_ok"] = "oui" if mine and mine == theirs else (
+
+        tva_ok = "oui" if status.lower().startswith("oui") else "non"
+        mine, theirs = norm_phone(gsm), norm_phone(phone)
+        gsm_ok = "oui" if mine and mine == theirs else (
             "absent KBO" if not theirs else "non"
         )
-        print(f"[{n}/{total}] TVA {tva or '-'} | KBO status: "
+
+        ws.cell(row=r, column=first_new, value=status)
+        ws.cell(row=r, column=first_new + 1, value=phone)
+        ws.cell(row=r, column=first_new + 2, value=tva_ok)
+        ws.cell(row=r, column=first_new + 3, value=gsm_ok)
+
+        print(f"[{r - 1}/{total}] TVA {tva or '-'} | KBO status: "
               f"{status or '-'} | KBO phone: {phone or '-'} | "
-              f"tva_ok={row['tva_ok']} gsm_ok={row['gsm_ok']}")
+              f"tva_ok={tva_ok} gsm_ok={gsm_ok}")
         time.sleep(1)
 
-    with open(dst, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=fields, delimiter=delimiter)
-        w.writeheader()
-        w.writerows(rows)
-
+    wb.save(dst)
     print(f"Done. Results saved to {dst}")
 
 
 if __name__ == "__main__":
-    src = sys.argv[1] if len(sys.argv) > 1 else "input.csv"
-    dst = sys.argv[2] if len(sys.argv) > 2 else "output.csv"
+    src = sys.argv[1] if len(sys.argv) > 1 else "input.xlsx"
+    dst = sys.argv[2] if len(sys.argv) > 2 else "output.xlsx"
     main(src, dst)
