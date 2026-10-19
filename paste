@@ -1,649 +1,89 @@
+"""Check TVA and GSM columns of a CSV against KBO Public Search.
 
+Usage: python check_kbo.py input.csv output.csv
+Requires: pip install requests beautifulsoup4
+"""
 import csv
-import json
 import re
-import sqlite3
+import sys
 import time
-from pathlib import Path
-from datetime import datetime
 
-from openpyxl import load_workbook
+import requests
+from bs4 import BeautifulSoup
 
-# ============================================================
-# 1. CONFIGURATION
-# ============================================================
-
-INPUT_FILE = Path(r"C:\KBO_CHECK\input_numbers.xlsx")
-KBO_ENTERPRISE_FILE = Path(r"C:\KBO_CHECK\KBO\enterprise.csv")
-OUTPUT_FOLDER = Path(r"C:\KBO_CHECK\RESULTS")
-
-INPUT_SHEET = None              # None = active worksheet
-TVA_COLUMN = "TVA"
-GSM_COLUMN = "GSM"
-
-BATCH_SIZE = 10_000
-PAUSE_SECONDS = 5
-
-# Keep this database to resume an interrupted run.
-DB_FILE = OUTPUT_FOLDER / "kbo_progress.sqlite"
-
-# Set True only to start the whole job from scratch.
-RESET_PROGRESS = False
-
-# Output reports
-FOUND_FILE = OUTPUT_FOLDER / "KBO_MATCHES.csv"
-NOT_FOUND_FILE = OUTPUT_FOLDER / "NUMBERS_NOT_FOUND.csv"
-MISPLACED_FILE = OUTPUT_FOLDER / "TVA_MISPLACED_IN_GSM.csv"
-UNCHECKED_FILE = OUTPUT_FOLDER / "UNCHECKED.csv"
-ALL_RESULTS_FILE = OUTPUT_FOLDER / "ALL_RESULTS.csv"
-
-# ============================================================
-# 2. GENERAL HELPERS
-# ============================================================
-
-OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
+TVA_COL = "TVA"   # 10 digits, BE prefix optional
+GSM_COL = "GSM"
+URL = "https://kbopub.economie.fgov.be/kbopub/toonondernemingps.html"
 
 
-def normalize_header(value):
-    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+def digits(value):
+    return re.sub(r"\D", "", value or "")
 
 
-def clean_digits(value):
-    """Remove formatting and return digits only."""
-    if value is None:
-        return ""
-
-    text = str(value).strip().upper()
-
-    if text in ("", "NONE", "NAN"):
-        return ""
-
-    # Handle Excel values such as 1234567890.0
-    text = re.sub(r"\.0+$", "", text)
-
-    return re.sub(r"\D", "", text)
+def norm_tva(value):
+    d = digits(value)
+    return d.zfill(10) if d else ""
 
 
-def normalize_tva(value):
-    """
-    Normalize a TVA / enterprise-number candidate.
+def norm_phone(value):
+    d = digits(value)
+    return d[-8:] if d else ""
 
-    BE0123456789 -> 0123456789
-    0123.456.789 -> 0123456789
 
-    Restore a missing leading zero for 9-digit TVA values.
-    """
-    number = clean_digits(value)
-
-    if len(number) == 9:
-        number = "0" + number
-
-    if len(number) == 10:
-        return number
-
+def value_after(lines, label):
+    for i, line in enumerate(lines):
+        if line.lower().startswith(label.lower()):
+            rest = line.split(":", 1)[1].strip() if ":" in line else ""
+            if rest:
+                return rest
+            if i + 1 < len(lines):
+                return lines[i + 1]
     return ""
 
 
-def normalize_gsm_candidate(value):
-    """
-    Do not automatically convert ordinary 9-digit phone
-    numbers into enterprise numbers.
-
-    Only a 10-digit value is treated as a direct candidate.
-    """
-    number = clean_digits(value)
-
-    if len(number) == 10:
-        return number
-
-    return ""
-
-
-def normalize_column_name(headers, wanted):
-    target = normalize_header(wanted)
-
-    for header in headers:
-        if normalize_header(header) == target:
-            return header
-
-    return None
+def fetch_kbo(number):
+    r = requests.get(
+        URL,
+        params={"ondernemingsnummer": number, "lang": "fr"},
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    status = value_after(lines, "Assujettie à la TVA")
+    phone = value_after(lines, "Numéro de téléphone")
+    return status, phone
 
 
-def to_json_safe(value):
-    """Convert Excel values to JSON-serializable values."""
-    if value is None:
-        return None
+def main(src, dst):
+    with open(src, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
 
-    if hasattr(value, "isoformat"):
+    extra = ["kbo_tva_status", "kbo_phone", "tva_ok", "gsm_ok"]
+    fields = list(rows[0].keys()) + extra
+
+    for row in rows:
+        tva = norm_tva(row.get(TVA_COL))
         try:
-            return value.isoformat()
-        except Exception:
-            pass
-
-    if isinstance(value, (str, int, float, bool)):
-        return value
-
-    return str(value)
-
-
-# ============================================================
-# 3. DATABASE AND CHECKPOINTS
-# ============================================================
-
-if RESET_PROGRESS and DB_FILE.exists():
-    DB_FILE.unlink()
-
-conn = sqlite3.connect(DB_FILE)
-
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS kbo_numbers (
-        number TEXT PRIMARY KEY
-    )
-""")
-
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS results (
-        row_id INTEGER PRIMARY KEY,
-        status TEXT NOT NULL,
-        original_json TEXT NOT NULL
-    )
-""")
-
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-    )
-""")
-
-conn.commit()
-
-
-def get_setting(key):
-    result = conn.execute(
-        "SELECT value FROM settings WHERE key = ?",
-        (key,)
-    ).fetchone()
-
-    return result[0] if result else None
-
-
-def set_setting(key, value):
-    conn.execute("""
-        INSERT OR REPLACE INTO settings(key, value)
-        VALUES (?, ?)
-    """, (key, str(value)))
-
-
-# ============================================================
-# 4. LOAD KBO ENTERPRISE NUMBERS
-# ============================================================
-
-def load_kbo_numbers():
-    if get_setting("kbo_loaded") == "yes":
-        print("KBO reference database already loaded.")
-        return
-
-    if not KBO_ENTERPRISE_FILE.exists():
-        raise FileNotFoundError(
-            f"KBO file not found:\n{KBO_ENTERPRISE_FILE}"
+            status, phone = fetch_kbo(tva) if tva else ("", "")
+        except Exception as e:
+            status, phone = f"ERREUR: {e}", ""
+        row["kbo_tva_status"] = status
+        row["kbo_phone"] = phone
+        row["tva_ok"] = "oui" if status.lower().startswith("oui") else "non"
+        mine, theirs = norm_phone(row.get(GSM_COL)), norm_phone(phone)
+        row["gsm_ok"] = "oui" if mine and mine == theirs else (
+            "absent KBO" if not theirs else "non"
         )
+        print(tva, row["tva_ok"], row["gsm_ok"])
+        time.sleep(1)
 
-    print("Loading KBO enterprise numbers...")
+    with open(dst, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
 
-    with open(
-        KBO_ENTERPRISE_FILE,
-        "r",
-        encoding="utf-8-sig",
-        newline=""
-    ) as file:
-
-        sample = file.read(65536)
-        file.seek(0)
-
-        try:
-            dialect = csv.Sniffer().sniff(
-                sample,
-                delimiters=";,\t|"
-            )
-        except csv.Error:
-            dialect = csv.excel
-            dialect.delimiter = ";"
-
-        reader = csv.DictReader(file, dialect=dialect)
-
-        if not reader.fieldnames:
-            raise ValueError("The KBO CSV has no header.")
-
-        header_map = {
-            normalize_header(header): header
-            for header in reader.fieldnames
-        }
-
-        number_column = header_map.get("enterprisenumber")
-
-        if not number_column:
-            raise ValueError(
-                "EnterpriseNumber was not found in the KBO file.\n"
-                f"Available headers: {reader.fieldnames}"
-            )
-
-        loaded = 0
-
-        for record in reader:
-            number = normalize_tva(record.get(number_column))
-
-            if not number:
-                continue
-
-            conn.execute(
-                "INSERT OR IGNORE INTO kbo_numbers(number) "
-                "VALUES (?)",
-                (number,)
-            )
-
-            loaded += 1
-
-            if loaded % 100_000 == 0:
-                conn.commit()
-                print(f"KBO records read: {loaded:,}")
-
-        conn.commit()
-
-        unique_count = conn.execute(
-            "SELECT COUNT(*) FROM kbo_numbers"
-        ).fetchone()[0]
-
-        set_setting("kbo_loaded", "yes")
-        set_setting(
-            "kbo_source",
-            str(KBO_ENTERPRISE_FILE.resolve())
-        )
-        set_setting("kbo_source_size", str(
-            KBO_ENTERPRISE_FILE.stat().st_size
-        ))
-        conn.commit()
-
-        print(f"Unique KBO numbers loaded: {unique_count:,}")
-
-
-def kbo_exists(number):
-    if not number:
-        return False
-
-    return conn.execute(
-        "SELECT 1 FROM kbo_numbers WHERE number = ?",
-        (number,)
-    ).fetchone() is not None
-
-
-# ============================================================
-# 5. OPEN INPUT EXCEL FILE
-# ============================================================
-
-def open_input_file():
-    if not INPUT_FILE.exists():
-        raise FileNotFoundError(
-            f"Input file not found:\n{INPUT_FILE}"
-        )
-
-    workbook = load_workbook(
-        INPUT_FILE,
-        read_only=True,
-        data_only=True
-    )
-
-    if INPUT_SHEET:
-        sheet = workbook[INPUT_SHEET]
-    else:
-        sheet = workbook.active
-
-    iterator = sheet.iter_rows(values_only=True)
-
-    try:
-        raw_headers = list(next(iterator))
-    except StopIteration:
-        workbook.close()
-        raise ValueError("The Excel worksheet is empty.")
-
-    headers = [
-        str(value).strip()
-        if value is not None
-        else f"EMPTY_HEADER_{i + 1}"
-        for i, value in enumerate(raw_headers)
-    ]
-
-    tva_header = normalize_column_name(headers, TVA_COLUMN)
-    gsm_header = normalize_column_name(headers, GSM_COLUMN)
-
-    if not tva_header:
-        workbook.close()
-        raise ValueError(
-            f"Column '{TVA_COLUMN}' not found.\n"
-            f"Available columns: {headers}"
-        )
-
-    if not gsm_header:
-        workbook.close()
-        raise ValueError(
-            f"Column '{GSM_COLUMN}' not found.\n"
-            f"Available columns: {headers}"
-        )
-
-    return (
-        workbook,
-        sheet,
-        iterator,
-        headers,
-        tva_header,
-        gsm_header
-    )
-
-
-# ============================================================
-# 6. CHECK TVA AND GSM
-# ============================================================
-
-def check_record(original, tva_header, gsm_header):
-    result = dict(original)
-
-    # TVA column: normalize the enterprise-number candidate
-    tva = normalize_tva(original.get(tva_header))
-
-    # GSM column: only direct 10-digit candidates
-    gsm = normalize_gsm_candidate(original.get(gsm_header))
-
-    tva_found = kbo_exists(tva) if tva else False
-    gsm_found = kbo_exists(gsm) if gsm else False
-
-    result["TVA_NORMALIZED"] = tva
-    result["TVA_KBO_STATUS"] = (
-        "FOUND" if tva_found
-        else "NOT_FOUND" if tva
-        else "UNCHECKED"
-    )
-
-    result["GSM_NORMALIZED_CANDIDATE"] = gsm
-    result["GSM_KBO_STATUS"] = (
-        "FOUND" if gsm_found
-        else "NOT_FOUND" if gsm
-        else "NOT_A_10_DIGIT_CANDIDATE"
-    )
-
-    # GSM contains an enterprise number found in KBO,
-    # while the TVA field does not match.
-    misplaced = gsm_found and not tva_found
-
-    result["TVA_FOUND_IN_GSM"] = "YES" if misplaced else "NO"
-
-    if tva_found or gsm_found:
-        overall = "FOUND"
-    elif tva or gsm:
-        overall = "NOT_FOUND"
-    else:
-        overall = "UNCHECKED"
-
-    result["OVERALL_STATUS"] = overall
-
-    # Keep reasons explicit for later auditing.
-    reasons = []
-
-    if tva_found:
-        reasons.append("TVA_FOUND_IN_KBO")
-    elif tva:
-        reasons.append("TVA_NOT_FOUND_IN_KBO")
-
-    if gsm_found:
-        reasons.append("GSM_VALUE_MATCHES_KBO_ENTERPRISE_NUMBER")
-    elif gsm:
-        reasons.append("GSM_CANDIDATE_NOT_FOUND_IN_KBO")
-
-    if not tva and not gsm:
-        reasons.append("NO_CHECKABLE_ENTERPRISE_NUMBER")
-
-    result["CHECK_REASON"] = "; ".join(reasons)
-
-    return result, overall, misplaced
-
-
-# ============================================================
-# 7. BATCH PROCESSING WITH RESUMABLE CHECKPOINTS
-# ============================================================
-
-def process_file():
-    load_kbo_numbers()
-
-    (
-        workbook,
-        sheet,
-        iterator,
-        headers,
-        tva_header,
-        gsm_header
-    ) = open_input_file()
-
-    signature = json.dumps({
-        "input": str(INPUT_FILE.resolve()),
-        "size": INPUT_FILE.stat().st_size,
-        "modified": INPUT_FILE.stat().st_mtime,
-        "sheet": sheet.title,
-        "headers": headers,
-        "tva_column": tva_header,
-        "gsm_column": gsm_header,
-        "batch_size": BATCH_SIZE
-    }, sort_keys=True)
-
-    previous_signature = get_setting("input_signature")
-
-    if (
-        previous_signature is not None
-        and previous_signature != signature
-    ):
-        workbook.close()
-        raise RuntimeError(
-            "Input file or configuration changed.\n"
-            "To start a fresh run, set RESET_PROGRESS = True "
-            "and run the program once."
-        )
-
-    set_setting("input_signature", signature)
-    conn.commit()
-
-    processed = conn.execute(
-        "SELECT COUNT(*) FROM results"
-    ).fetchone()[0]
-
-    print(f"Previously completed rows: {processed:,}")
-
-    # Skip rows already saved in the checkpoint.
-    for _ in range(processed):
-        try:
-            next(iterator)
-        except StopIteration:
-            workbook.close()
-            raise RuntimeError(
-                "Checkpoint exceeds input row count. "
-                "Check the file or reset progress."
-            )
-
-    batch = []
-    completed = processed
-    row_id = processed
-
-    try:
-        for excel_row in iterator:
-            row_id += 1
-
-            original = {
-                headers[i]: (
-                    to_json_safe(excel_row[i])
-                    if i < len(excel_row) else None
-                )
-                for i in range(len(headers))
-            }
-
-            # Ignore completely empty rows.
-            if all(value is None for value in original.values()):
-                original["_SOURCE_EXCEL_ROW"] = row_id + 1
-                original["_SKIPPED_EMPTY_ROW"] = "YES"
-                result = original
-                status = "UNCHECKED"
-            else:
-                original["_SOURCE_EXCEL_ROW"] = row_id + 1
-
-                result, status, misplaced = check_record(
-                    original,
-                    tva_header,
-                    gsm_header
-                )
-
-            batch.append((
-                row_id,
-                status,
-                json.dumps(result, ensure_ascii=False)
-            ))
-
-            if len(batch) >= BATCH_SIZE:
-                save_batch(batch)
-                completed += len(batch)
-
-                print(
-                    f"[{datetime.now():%H:%M:%S}] "
-                    f"Checkpoint saved: {completed:,} rows"
-                )
-
-                batch.clear()
-                time.sleep(PAUSE_SECONDS)
-
-        if batch:
-            save_batch(batch)
-            completed += len(batch)
-            batch.clear()
-
-        print(f"Processing complete: {completed:,} rows")
-
-    finally:
-        workbook.close()
-
-    export_reports()
-
-
-def save_batch(batch):
-    conn.execute("BEGIN")
-
-    try:
-        conn.executemany("""
-            INSERT INTO results(row_id, status, original_json)
-            VALUES (?, ?, ?)
-        """, batch)
-
-        set_setting(
-            "processed_rows",
-            str(batch[-1][0])
-        )
-
-        conn.commit()
-
-    except Exception:
-        conn.rollback()
-        raise
-
-
-# ============================================================
-# 8. EXPORT FIVE REPORTS
-# ============================================================
-
-def export_reports():
-    reports = {
-        "FOUND": FOUND_FILE,
-        "NOT_FOUND": NOT_FOUND_FILE,
-        "UNCHECKED": UNCHECKED_FILE,
-        "ALL": ALL_RESULTS_FILE,
-        "MISPLACED": MISPLACED_FILE
-    }
-
-    counts = {key: 0 for key in reports}
-
-    for report_name, output_path in reports.items():
-        temp_path = output_path.with_suffix(".tmp")
-
-        with open(
-            temp_path,
-            "w",
-            encoding="utf-8-sig",
-            newline=""
-        ) as file:
-
-            writer = None
-
-            cursor = conn.execute("""
-                SELECT status, original_json
-                FROM results
-                ORDER BY row_id
-            """)
-
-            for status, original_json in cursor:
-                record = json.loads(original_json)
-
-                if report_name == "FOUND" and status != "FOUND":
-                    continue
-
-                if report_name == "NOT_FOUND" and status != "NOT_FOUND":
-                    continue
-
-                if report_name == "UNCHECKED" and status != "UNCHECKED":
-                    continue
-
-                if report_name == "MISPLACED":
-                    if record.get("TVA_FOUND_IN_GSM") != "YES":
-                        continue
-
-                if writer is None:
-                    writer = csv.DictWriter(
-                        file,
-                        fieldnames=list(record.keys()),
-                        extrasaction="ignore"
-                    )
-                    writer.writeheader()
-
-                writer.writerow(record)
-                counts[report_name] += 1
-
-            if writer is None:
-                writer = csv.writer(file)
-                writer.writerow(["No records in this report"])
-
-        temp_path.replace(output_path)
-
-    print("\n" + "=" * 55)
-    print("KBO CHECK COMPLETED")
-    print("=" * 55)
-
-    for name, path in reports.items():
-        print(f"{name:12} {counts[name]:>10,} rows")
-        print(f"             {path}")
-
-    print("\nCheckpoint database:")
-    print(DB_FILE)
-
-
-# ============================================================
-# 9. RUN
-# ============================================================
 
 if __name__ == "__main__":
-    try:
-        process_file()
-
-    except KeyboardInterrupt:
-        print(
-            "\nInterrupted. Completed batches are saved. "
-            "Run again to resume."
-        )
-
-    except Exception as exc:
-        print(f"\nERROR: {exc}")
-        raise
-
-    finally:
-        conn.close()
+    main(sys.argv[1], sys.argv[2])
