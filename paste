@@ -1,1 +1,359 @@
-=LET(x;A2;TEXTJOIN("";TRUE;IFERROR(MID(x;SEQUENCE(LEN(x));1)*1;"")))
+
+import re
+import csv
+from pathlib import Path
+from openpyxl import load_workbook
+
+# ============================================================
+# CONFIGURATION — CHANGE THESE PATHS
+# ============================================================
+
+INPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\NET\B2B")
+OUTPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\NET\B2B_TELE_CLEANED")
+
+REPORT_FILE = OUTPUT_FOLDER / "tele_cleaning_report.csv"
+
+# Common TELE column header variations
+TELE_HEADERS = {
+    "TELE", "TELEPHONE", "TELEPHONES",
+    "TELEPHONE NUMBER", "NUMERO TELEPHONE",
+    "NUMÉRO TÉLÉPHONE", "TÉLÉPHONE",
+    "TEL", "TEL FIXE", "TELE FIXE"
+}
+
+# ============================================================
+# NORMALIZE HEADER
+# ============================================================
+
+def normalize_header(value):
+    if value is None:
+        return ""
+
+    value = str(value).strip().upper()
+    value = value.replace("É", "E").replace("È", "E")
+    value = value.replace("Ê", "E").replace("Ë", "E")
+    value = value.replace("_", " ")
+    value = re.sub(r"\s+", " ", value)
+
+    return value
+
+
+def find_tele_column(ws):
+    # Check the first 10 rows to support files with title rows.
+    for row_num in range(1, min(ws.max_row, 10) + 1):
+        for cell in ws[row_num]:
+            header = normalize_header(cell.value)
+
+            if header in TELE_HEADERS:
+                return row_num, cell.column
+
+    return None, None
+
+
+# ============================================================
+# CLEAN PHONE NUMBERS
+# ============================================================
+
+def split_phone_values(value):
+    """
+    Split multiple phone numbers separated by slash, semicolon,
+    comma, line break or pipe.
+    Hyphens are NOT split because they can separate digits
+    within a single phone number.
+    """
+    if value is None:
+        return []
+
+    text = str(value).strip()
+
+    if not text:
+        return []
+
+    # Handle Excel numbers saved as strings such as 475123456.0
+    if re.fullmatch(r"\d+\.0+", text):
+        text = text.split(".")[0]
+
+    # Split multiple values; do not split on spaces or hyphens.
+    parts = re.split(r"[/;,\n\r|]+", text)
+
+    return [part.strip() for part in parts if part.strip()]
+
+
+def clean_one_phone(value):
+    """
+    Clean one phone value.
+    Returns an empty string when no digits remain.
+    """
+
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+
+    if not text:
+        return ""
+
+    # Remove Excel's decimal suffix if stored as text.
+    if re.fullmatch(r"\d+\.0+", text):
+        text = text.split(".")[0]
+
+    # Keep digits only: removes +, spaces, brackets, dots,
+    # slashes, letters, punctuation and other symbols.
+    digits = re.sub(r"\D", "", text)
+
+    if not digits:
+        return ""
+
+    # Remove repeated Belgian international prefixes.
+    # These rules remove the country code; they do not
+    # automatically convert it into a local leading zero.
+    while digits.startswith("000032"):
+        digits = digits[6:]
+
+    while digits.startswith("0032"):
+        digits = digits[4:]
+
+    # Remove 32 only when the remaining length is plausible
+    # for a Belgian number written with the international code.
+    if digits.startswith("32") and len(digits) in (10, 11):
+        digits = digits[2:]
+
+    return digits
+
+
+def clean_tele_cell(value):
+    """
+    Clean the TELE cell and return:
+    cleaned value, number of detected parts, number of valid
+    digit-containing parts, number of discarded parts.
+    """
+
+    parts = split_phone_values(value)
+
+    if not parts:
+        return "", 0, 0, 0
+
+    cleaned_numbers = []
+    valid_count = 0
+    discarded_count = 0
+
+    for part in parts:
+        cleaned = clean_one_phone(part)
+
+        if cleaned:
+            valid_count += 1
+
+            # Avoid duplicate numbers within the same cell.
+            # The first occurrence is retained.
+            if cleaned not in cleaned_numbers:
+                cleaned_numbers.append(cleaned)
+        else:
+            discarded_count += 1
+
+    return (
+        "; ".join(cleaned_numbers),
+        len(parts),
+        valid_count,
+        discarded_count
+    )
+
+
+# ============================================================
+# PROCESS ONE EXCEL FILE
+# ============================================================
+
+def process_file(input_file, output_file, report_rows):
+
+    keep_vba = input_file.suffix.lower() == ".xlsm"
+
+    wb = load_workbook(
+        input_file,
+        keep_vba=keep_vba
+    )
+
+    file_changed = False
+    sheets_found = 0
+    cells_processed = 0
+    cells_changed = 0
+    numbers_removed = 0
+    cells_without_tele = 0
+
+    try:
+        for ws in wb.worksheets:
+
+            header_row, tele_col = find_tele_column(ws)
+
+            if tele_col is None:
+                continue
+
+            sheets_found += 1
+
+            for row_num in range(header_row + 1, ws.max_row + 1):
+
+                cell = ws.cell(row=row_num, column=tele_col)
+
+                # Never overwrite formulas.
+                if cell.data_type == "f":
+                    continue
+
+                original = cell.value
+
+                if original is None or str(original).strip() == "":
+                    continue
+
+                cells_processed += 1
+
+                cleaned, part_count, valid_count, discarded = (
+                    clean_tele_cell(original)
+                )
+
+                original_text = str(original).strip()
+
+                if cleaned != original_text:
+                    cell.value = cleaned
+                    file_changed = True
+                    cells_changed += 1
+
+                numbers_removed += discarded
+
+                if not cleaned:
+                    cells_without_tele += 1
+
+            report_rows.append([
+                input_file.name,
+                ws.title,
+                header_row,
+                tele_col,
+                cells_processed,
+                cells_changed,
+                numbers_removed,
+                cells_without_tele,
+                "TELE found"
+            ])
+
+        if sheets_found == 0:
+            report_rows.append([
+                input_file.name, "", "", "",
+                0, 0, 0, 0, "TELE column not found"
+            ])
+
+        # Save a copy even if no changes were necessary.
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        wb.save(output_file)
+
+        return sheets_found, cells_processed, cells_changed
+
+    finally:
+        wb.close()
+
+
+# ============================================================
+# MAIN PROGRAM
+# ============================================================
+
+def main():
+
+    if not INPUT_FOLDER.exists():
+        print(f"ERROR: Input folder does not exist:\n{INPUT_FOLDER}")
+        return
+
+    OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
+
+    # Find Excel files, excluding temporary files and
+    # preventing the output folder from being read as input.
+    files = sorted(
+        file for file in INPUT_FOLDER.iterdir()
+        if file.is_file()
+        and file.suffix.lower() in (".xlsx", ".xlsm")
+        and not file.name.startswith("~$")
+        and file.resolve().parent != OUTPUT_FOLDER.resolve()
+    )
+
+    if not files:
+        print("No .xlsx or .xlsm files found.")
+        return
+
+    report_rows = []
+    processed_files = 0
+    failed_files = 0
+    total_cells = 0
+    total_changed = 0
+
+    print(f"Found {len(files)} Excel files.")
+    print("Starting TELE cleaning...\n")
+
+    for index, input_file in enumerate(files, start=1):
+
+        output_file = OUTPUT_FOLDER / input_file.name
+
+        try:
+            sheets, cells, changed = process_file(
+                input_file,
+                output_file,
+                report_rows
+            )
+
+            processed_files += 1
+            total_cells += cells
+            total_changed += changed
+
+            print(
+                f"[{index}/{len(files)}] {input_file.name} | "
+                f"Sheets with TELE: {sheets} | "
+                f"Cells checked: {cells} | "
+                f"Cells changed: {changed}"
+            )
+
+        except Exception as error:
+            failed_files += 1
+
+            report_rows.append([
+                input_file.name, "", "", "",
+                0, 0, 0, 0,
+                f"ERROR: {error}"
+            ])
+
+            print(
+                f"[{index}/{len(files)}] ERROR: "
+                f"{input_file.name}: {error}"
+            )
+
+    # Save a CSV report for auditing.
+    with open(
+        REPORT_FILE,
+        "w",
+        newline="",
+        encoding="utf-8-sig"
+    ) as report_file:
+
+        writer = csv.writer(report_file, delimiter=";")
+
+        writer.writerow([
+            "File",
+            "Sheet",
+            "Header Row",
+            "TELE Column Number",
+            "Cells Checked",
+            "Cells Changed",
+            "Parts Without Digits",
+            "Cells Left Empty",
+            "Status"
+        ])
+
+        writer.writerows(report_rows)
+
+    print("\n" + "=" * 60)
+    print("TELE CLEANING FINISHED")
+    print("=" * 60)
+    print(f"Files found:       {len(files)}")
+    print(f"Files processed:   {processed_files}")
+    print(f"Files with errors: {failed_files}")
+    print(f"Cells checked:     {total_cells}")
+    print(f"Cells changed:     {total_changed}")
+    print(f"Cleaned files:     {OUTPUT_FOLDER}")
+    print(f"Audit report:      {REPORT_FILE}")
+
+
+if __name__ == "__main__":
+    main()
+
