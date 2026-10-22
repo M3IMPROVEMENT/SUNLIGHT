@@ -1,624 +1,148 @@
-import json
-import re
-import sqlite3
-from pathlib import Path
 
-from openpyxl import load_workbook, Workbook
-
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-INPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\NET\B2B")
-OUTPUT_FOLDER = Path(r"C:\Users\Sunlight\Desktop\NET\B2B")
-SQLITE_FILE = Path(
-    r"C:\Users\Sunlight\Desktop\NET\B2B\DEDU\deduplication_temp.db"
-)
-
-CHUNK_SIZE = 100_000
-MAX_OUTPUT_ROWS = 1_000_000
-
-TELE_COLUMN = "TELEPHONE"
-TVA_COLUMN = "TVA"
-
-
-# ============================================================
-# BASIC FUNCTIONS
-# ============================================================
-
-def is_empty(value):
-    if value is None:
-        return True
-
-    if isinstance(value, str):
-        return value.strip() == ""
-
-    return False
-
-
-def clean_text(value):
-    if value is None:
-        return ""
-
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-
-    return str(value).strip()
-
-
-# ============================================================
-# TELEPHONE NORMALIZATION
-# ============================================================
-
-def normalize_tele(value):
-    if is_empty(value):
-        return ""
-
-    value = clean_text(value)
-
-    # Remove Excel decimal suffix
-    if value.endswith(".0"):
-        value = value[:-2]
-
-    # Keep digits only
-    digits = re.sub(r"\D", "", value)
-
-    if not digits:
-        return ""
-
-    # International Belgian prefix
-    if digits.startswith("0032"):
-        digits = "32" + digits[4:]
-
-    # Convert international prefix to Belgian local format
-    if digits.startswith("32"):
-        digits = "0" + digits[2:]
-
-    # Already starts with zero
-    if digits.startswith("0"):
-        return digits
-
-    # Nine digits without leading zero
-    if len(digits) == 9:
-        return "0" + digits
-
-    return digits
-
-
-# ============================================================
-# TVA CHECK
-# ============================================================
-
-def has_tva(value):
-    if is_empty(value):
-        return False
-
-    value = clean_text(value).upper()
-    value = re.sub(r"\s+", "", value)
-
-    return value not in {"", "NONE", "NAN", "NULL"}
-
-
-# ============================================================
-# ROW COMPLETENESS
-# ============================================================
-
-def row_score(row):
-    return sum(not is_empty(value) for value in row)
-
-
-# ============================================================
-# MERGE DUPLICATE ROWS
-# ============================================================
-
-def merge_rows(old_row, new_row, headers):
-
-    tva_index = next(
-        (
-            i for i, header in enumerate(headers)
-            if str(header).strip().upper() == TVA_COLUMN
-        ),
-        None
-    )
-
-    old_has_tva = (
-        tva_index is not None
-        and has_tva(old_row[tva_index])
-    )
-
-    new_has_tva = (
-        tva_index is not None
-        and has_tva(new_row[tva_index])
-    )
-
-    old_score = row_score(old_row)
-    new_score = row_score(new_row)
-
-    # Select the primary row
-    if new_has_tva and not old_has_tva:
-        primary = new_row
-        secondary = old_row
-
-    elif old_has_tva and not new_has_tva:
-        primary = old_row
-        secondary = new_row
-
-    elif new_score > old_score:
-        primary = new_row
-        secondary = old_row
-
-    else:
-        primary = old_row
-        secondary = new_row
-
-    # Fill empty cells from the secondary row
-    merged = list(primary)
-
-    for i in range(len(merged)):
-        if is_empty(merged[i]) and not is_empty(secondary[i]):
-            merged[i] = secondary[i]
-
-    return merged
-
-
-# ============================================================
-# SQLITE DATABASE
-# No duplicate audit table
-# ============================================================
-
-def create_database():
-
-    SQLITE_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    # Remove the previous temporary database
-    if SQLITE_FILE.exists():
-        SQLITE_FILE.unlink()
-
-    conn = sqlite3.connect(SQLITE_FILE)
-
-    conn.execute("""
-        CREATE TABLE records (
-            tele_key TEXT PRIMARY KEY,
-            row_data TEXT NOT NULL,
-            source_file TEXT NOT NULL
-        )
-    """)
-
-    conn.commit()
-
-    return conn
-
-
-# ============================================================
-# PROCESS ONE CHUNK
-# ============================================================
-
-def process_chunk(rows, headers, conn, source_file, empty_counter):
-
-    cursor = conn.cursor()
-
-    tele_index = next(
-        (
-            i for i, header in enumerate(headers)
-            if str(header).strip().upper() == TELE_COLUMN
-        ),
-        None
-    )
-
-    if tele_index is None:
-        raise ValueError(
-            f"Column '{TELE_COLUMN}' not found in {source_file}"
-        )
-
-    tva_index = next(
-        (
-            i for i, header in enumerate(headers)
-            if str(header).strip().upper() == TVA_COLUMN
-        ),
-        None
-    )
-
-    inserted = 0
-    duplicates = 0
-
-    for row in rows:
-
-        row = list(row)
-
-        # Ensure every row has the expected number of columns
-        if len(row) < len(headers):
-            row.extend([""] * (len(headers) - len(row)))
-
-        elif len(row) > len(headers):
-            row = row[:len(headers)]
-
-        # Normalize the telephone used as the deduplication key
-        tele_key = normalize_tele(row[tele_index])
-
-        # Keep rows with empty telephones; do not deduplicate them
-        if not tele_key:
-            empty_counter[0] += 1
-
-            unique_key = f"__EMPTY_TELE__{empty_counter[0]}"
-
-            cursor.execute(
-                """
-                INSERT INTO records (tele_key, row_data, source_file)
-                VALUES (?, ?, ?)
-                """,
-                (
-                    unique_key,
-                    json.dumps(row, ensure_ascii=False, default=str),
-                    source_file
-                )
-            )
-
-            inserted += 1
-            continue
-
-        # Find an existing record with the same normalized telephone
-        cursor.execute(
-            """
-            SELECT row_data, source_file
-            FROM records
-            WHERE tele_key = ?
-            """,
-            (tele_key,)
-        )
-
-        result = cursor.fetchone()
-
-        # No duplicate: insert a new record
-        if result is None:
-
-            cursor.execute(
-                """
-                INSERT INTO records (tele_key, row_data, source_file)
-                VALUES (?, ?, ?)
-                """,
-                (
-                    tele_key,
-                    json.dumps(row, ensure_ascii=False, default=str),
-                    source_file
-                )
-            )
-
-            inserted += 1
-            continue
-
-        # Duplicate found: merge it into the existing record
-        duplicates += 1
-
-        old_row = json.loads(result[0])
-        old_source_file = result[1]
-
-        merged_row = merge_rows(old_row, row, headers)
-
-        # Keep the source filename of the row that takes priority
-        old_has_tva = (
-            tva_index is not None
-            and has_tva(old_row[tva_index])
-        )
-
-        new_has_tva = (
-            tva_index is not None
-            and has_tva(row[tva_index])
-        )
-
-        if new_has_tva and not old_has_tva:
-            final_source_file = source_file
-
-        elif old_has_tva and not new_has_tva:
-            final_source_file = old_source_file
-
-        elif row_score(row) > row_score(old_row):
-            final_source_file = source_file
-
-        else:
-            final_source_file = old_source_file
-
-        cursor.execute(
-            """
-            UPDATE records
-            SET row_data = ?,
-                source_file = ?
-            WHERE tele_key = ?
-            """,
-            (
-                json.dumps(
-                    merged_row,
-                    ensure_ascii=False,
-                    default=str
-                ),
-                final_source_file,
-                tele_key
-            )
-        )
-
-    conn.commit()
-
-    return inserted, duplicates
-
-
-# ============================================================
-# PROCESS ONE EXCEL FILE
-# ============================================================
-
-def process_excel_file(file_path, conn, headers_reference, empty_counter):
-
-    print()
-    print("=" * 70)
-    print(f"PROCESSING: {file_path.name}")
-    print("=" * 70)
-
-    wb = load_workbook(
-        filename=file_path,
-        read_only=True,
-        data_only=True
-    )
-
-    try:
-        ws = wb.active
-        rows_iterator = ws.iter_rows(values_only=True)
-
-        try:
-            headers = [clean_text(h) for h in next(rows_iterator)]
-        except StopIteration:
-            print("Empty workbook: skipped.")
-            return headers_reference
-
-        header_upper = [
-            str(h).strip().upper() for h in headers
-        ]
-
-        if TELE_COLUMN not in header_upper:
-            raise ValueError(
-                f"Column '{TELE_COLUMN}' not found in {file_path.name}.\n"
-                f"Available columns: {headers}"
-            )
-
-        # First non-empty file defines the column structure
-        if headers_reference is None:
-            headers_reference = headers
-
-        elif headers != headers_reference:
-            raise ValueError(
-                f"Column structure differs in {file_path.name}.\n"
-                f"Expected: {headers_reference}\n"
-                f"Found: {headers}"
-            )
-
-        chunk = []
-
-        total_rows = 0
-        total_inserted = 0
-        total_duplicates = 0
-
-        for row in rows_iterator:
-
-            chunk.append(row)
-
-            if len(chunk) >= CHUNK_SIZE:
-
-                inserted, duplicates = process_chunk(
-                    chunk,
-                    headers_reference,
-                    conn,
-                    file_path.name,
-                    empty_counter
-                )
-
-                total_rows += len(chunk)
-                total_inserted += inserted
-                total_duplicates += duplicates
-
-                print(
-                    f"Processed: {total_rows:,} rows | "
-                    f"Duplicates merged: {total_duplicates:,}"
-                )
-
-                chunk = []
-
-        # Process the final partial chunk
-        if chunk:
-
-            inserted, duplicates = process_chunk(
-                chunk,
-                headers_reference,
-                conn,
-                file_path.name,
-                empty_counter
-            )
-
-            total_rows += len(chunk)
-            total_inserted += inserted
-            total_duplicates += duplicates
-
-        print(f"\nFinished: {file_path.name}")
-        print(f"Rows processed: {total_rows:,}")
-        print(f"New records: {total_inserted:,}")
-        print(f"Duplicates merged: {total_duplicates:,}")
-
-        return headers_reference
-
-    finally:
-        wb.close()
-
-
-# ============================================================
-# EXPORT FINAL DEDUPLICATED RESULTS
-# ============================================================
-
-def export_main_results(conn, headers):
-
-    OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
-
-    cursor = conn.cursor()
-    cursor.execute("SELECT row_data FROM records")
-
-    output_number = 1
-    rows_in_file = 0
-    total_exported = 0
-
-    def create_workbook(number):
-
-        filename = OUTPUT_FOLDER / (
-            f"deduplicated_part_{number:02d}.xlsx"
-        )
-
-        workbook = Workbook(write_only=True)
-        worksheet = workbook.create_sheet("Data")
-        worksheet.append(headers)
-
-        return workbook, worksheet, filename
-
-    wb, ws, output_file = create_workbook(output_number)
-
-    print()
-    print("=" * 70)
-    print("EXPORTING FINAL RESULTS")
-    print("=" * 70)
-
-    try:
-        for result in cursor:
-
-            row = json.loads(result[0])
-
-            # Start a new workbook after reaching the data-row limit
-            if rows_in_file >= MAX_OUTPUT_ROWS:
-
-                wb.save(output_file)
-
-                print(
-                    f"Created: {output_file.name} "
-                    f"({rows_in_file:,} data rows)"
-                )
-
-                output_number += 1
-                wb, ws, output_file = create_workbook(output_number)
-                rows_in_file = 0
-
-            ws.append(row)
-
-            rows_in_file += 1
-            total_exported += 1
-
-            if total_exported % 100_000 == 0:
-                print(f"Exported: {total_exported:,} rows")
-
-        # Save the final workbook
-        wb.save(output_file)
-
-        print(
-            f"Created: {output_file.name} "
-            f"({rows_in_file:,} data rows)"
-        )
-
-    except Exception:
-        # Do not leave an open workbook if export fails
-        raise
-
-    print()
-    print(f"TOTAL FINAL ROWS: {total_exported:,}")
-    print(f"OUTPUT FILES: {output_number}")
-
-
-# ============================================================
-# FIND INPUT FILES
-# Excludes previous outputs and temporary Excel lock files
-# ============================================================
-
-def get_input_files():
-
-    if not INPUT_FOLDER.exists():
-        raise FileNotFoundError(
-            f"Input folder does not exist: {INPUT_FOLDER}"
-        )
-
-    files = []
-
-    for path in INPUT_FOLDER.iterdir():
-
-        if not path.is_file():
-            continue
-
-        if path.name.startswith("~$"):
-            continue
-
-        if path.stem.lower().startswith("deduplicated_part_"):
-            continue
-
-        if path.suffix.lower() in {".xlsx", ".xlsm"}:
-            files.append(path)
-
-    return sorted(files, key=lambda p: p.name.lower())
-
-
-# ============================================================
-# MAIN PROGRAM
-# ============================================================
-
-def main():
-
-    print("=" * 70)
-    print("TELEPHONE DEDUPLICATION AND ROW MERGING")
-    print("=" * 70)
-
-    print(f"Input folder: {INPUT_FOLDER}")
-    print(f"Output folder: {OUTPUT_FOLDER}")
-    print("Duplicate audit: DISABLED")
-    print("Deduplication key: TELEPHONE")
-    print("Priority: TVA, then row completeness")
-
-    files = get_input_files()
-
-    if not files:
-        print("\nNo Excel input files found.")
-        return
-
-    print(f"\nExcel files found: {len(files):,}")
-
-    conn = None
-
-    try:
-        conn = create_database()
-
-        headers_reference = None
-        empty_counter = [0]
-
-        total_files = len(files)
-
-        for index, file_path in enumerate(files, start=1):
-
-            print(f"\nFILE {index:,} OF {total_files:,}")
-
-            headers_reference = process_excel_file(
-                file_path,
-                conn,
-                headers_reference,
-                empty_counter
-            )
-
-        if headers_reference is None:
-            print("No usable Excel files found.")
-            return
-
-        # Export only the final deduplicated results
-        export_main_results(conn, headers_reference)
-
-        print("\n" + "=" * 70)
-        print("PROCESS COMPLETED SUCCESSFULLY")
-        print("=" * 70)
-
-        print(f"Files processed: {total_files:,}")
-        print(f"Empty TELEPHONE rows preserved: {empty_counter[0]:,}")
-        print(f"Results saved in: {OUTPUT_FOLDER}")
-
-    finally:
-        if conn is not None:
-            conn.close()
-
-
-if __name__ == "__main__":
+New records: 938,426
+Duplicates merged: 61,574
+
+FILE 16 OF 18
+
+======================================================================
+PROCESSING: 7.xlsx
+======================================================================
+Processed: 100,000 rows | Duplicates merged: 17
+Processed: 200,000 rows | Duplicates merged: 34,036
+Processed: 300,000 rows | Duplicates merged: 110,579
+Processed: 400,000 rows | Duplicates merged: 182,224
+Processed: 500,000 rows | Duplicates merged: 261,230
+Processed: 600,000 rows | Duplicates merged: 310,428
+Processed: 700,000 rows | Duplicates merged: 310,428
+Processed: 800,000 rows | Duplicates merged: 310,428
+Processed: 900,000 rows | Duplicates merged: 310,428
+Processed: 1,000,000 rows | Duplicates merged: 310,428
+
+Finished: 7.xlsx
+Rows processed: 1,000,001
+New records: 689,573
+Duplicates merged: 310,428
+
+FILE 17 OF 18
+
+======================================================================
+PROCESSING: 8.xlsx
+======================================================================
+Processed: 100,000 rows | Duplicates merged: 52,284
+Processed: 200,000 rows | Duplicates merged: 52,284
+Processed: 300,000 rows | Duplicates merged: 52,284
+Processed: 400,000 rows | Duplicates merged: 52,284
+Processed: 500,000 rows | Duplicates merged: 52,284
+Processed: 600,000 rows | Duplicates merged: 52,284
+Processed: 700,000 rows | Duplicates merged: 52,284
+Processed: 800,000 rows | Duplicates merged: 52,284
+Processed: 900,000 rows | Duplicates merged: 52,284
+Processed: 1,000,000 rows | Duplicates merged: 52,284
+
+Finished: 8.xlsx
+Rows processed: 1,000,000
+New records: 947,716
+Duplicates merged: 52,284
+
+FILE 18 OF 18
+
+======================================================================
+PROCESSING: 9.xlsx
+======================================================================
+Processed: 100,000 rows | Duplicates merged: 0
+Processed: 200,000 rows | Duplicates merged: 0
+Processed: 300,000 rows | Duplicates merged: 0
+Processed: 400,000 rows | Duplicates merged: 0
+Processed: 500,000 rows | Duplicates merged: 0
+Processed: 600,000 rows | Duplicates merged: 0
+Processed: 700,000 rows | Duplicates merged: 0
+Processed: 800,000 rows | Duplicates merged: 0
+Processed: 900,000 rows | Duplicates merged: 0
+Processed: 1,000,000 rows | Duplicates merged: 0
+
+Finished: 9.xlsx
+Rows processed: 1,000,000
+New records: 1,000,000
+Duplicates merged: 0
+
+======================================================================
+EXPORTING FINAL RESULTS
+======================================================================
+Exported: 100,000 rows
+Exported: 200,000 rows
+Exported: 300,000 rows
+Exported: 400,000 rows
+Exported: 500,000 rows
+Exported: 600,000 rows
+Exported: 700,000 rows
+Exported: 800,000 rows
+Exported: 900,000 rows
+Exported: 1,000,000 rows
+Created: deduplicated_part_01.xlsx (1,000,000 data rows)
+Exported: 1,100,000 rows
+Exported: 1,200,000 rows
+Exported: 1,300,000 rows
+Exported: 1,400,000 rows
+Exported: 1,500,000 rows
+Exported: 1,600,000 rows
+Exported: 1,700,000 rows
+Exported: 1,800,000 rows
+Exported: 1,900,000 rows
+Exported: 2,000,000 rows
+Created: deduplicated_part_02.xlsx (1,000,000 data rows)
+Exported: 2,100,000 rows
+Exported: 2,200,000 rows
+Exported: 2,300,000 rows
+Exported: 2,400,000 rows
+Exported: 2,500,000 rows
+Exported: 2,600,000 rows
+Exported: 2,700,000 rows
+Exported: 2,800,000 rows
+Exported: 2,900,000 rows
+Exported: 3,000,000 rows
+Created: deduplicated_part_03.xlsx (1,000,000 data rows)
+Exported: 3,100,000 rows
+Exported: 3,200,000 rows
+Exported: 3,300,000 rows
+Exported: 3,400,000 rows
+Exported: 3,500,000 rows
+Exported: 3,600,000 rows
+Exported: 3,700,000 rows
+Exported: 3,800,000 rows
+Exported: 3,900,000 rows
+Exported: 4,000,000 rows
+Created: deduplicated_part_04.xlsx (1,000,000 data rows)
+Exported: 4,100,000 rows
+Exported: 4,200,000 rows
+Exported: 4,300,000 rows
+Exported: 4,400,000 rows
+Exported: 4,500,000 rows
+Exported: 4,600,000 rows
+Exported: 4,700,000 rows
+Exported: 4,800,000 rows
+Traceback (most recent call last):
+  File "C:\Users\Sunlight\Documents\NET - Copie\RS\Nouveau dossier\script.PY", line 624, in <module>
     main()
+  File "C:\Users\Sunlight\Documents\NET - Copie\RS\Nouveau dossier\script.PY", line 608, in main
+    export_main_results(conn, headers_reference)
+  File "C:\Users\Sunlight\Documents\NET - Copie\RS\Nouveau dossier\script.PY", line 502, in export_main_results
+    ws.append(row)
+  File "C:\Users\Sunlight\AppData\Local\Programs\Python\Python311\Lib\site-packages\openpyxl\worksheet\_write_only.py", line 120, in append
+    self._rows.send(row)
+  File "C:\Users\Sunlight\AppData\Local\Programs\Python\Python311\Lib\site-packages\openpyxl\worksheet\_write_only.py", line 72, in _write_rows
+    self._writer.write_row(xf, row, row_idx)
+  File "C:\Users\Sunlight\AppData\Local\Programs\Python\Python311\Lib\site-packages\openpyxl\worksheet\_writer.py", line 147, in write_row
+    write_cell(xf, self.ws, cell, cell.has_style)
+  File "C:\Users\Sunlight\AppData\Local\Programs\Python\Python311\Lib\site-packages\openpyxl\cell\_writer.py", line 86, in etree_write_cell
+    xf.write(el)
+  File "C:\Users\Sunlight\AppData\Local\Programs\Python\Python311\Lib\site-packages\et_xmlfile\xmlfile.py", line 120, in write
+    incremental_tree._serialize_ns_xml(
+  File "C:\Users\Sunlight\AppData\Local\Programs\Python\Python311\Lib\site-packages\et_xmlfile\incremental_tree.py", line 639, in _serialize_ns_xml
+    write(f"</{tag}>")
+OSError: [Errno 28] No space left on device
+Exception ignored in atexit callback: <function _openpyxl_shutdown at 0x000002220A09C400>
+Traceback (most recent call last):
+  File "C:\Users\Sunlight\AppData\Local\Programs\Python\Python311\Lib\site-packages\openpyxl\worksheet\_writer.py", line 32, in _openpyxl_shutdown
+    os.remove(path)
+PermissionError: [WinError 32] Le processus ne peut pas accéder au fichier car ce fichier est utilisé par un autre processus: 'C:\\Users\\Sunlight\\AppData\\Local\\Temp\\openpyxl.cbz8b9wj'
+PS C:\Users\Sunlight\Documents\NET - Copie\RS\Nouveau dossier> 
