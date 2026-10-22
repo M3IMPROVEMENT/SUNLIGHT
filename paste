@@ -5,11 +5,11 @@ import pandas as pd
 # ================= CONFIGURATION =================
 
 INPUT_FILE = Path(
-    r"C:\Users\Sunlight\Desktop\NET\B2B\merged.xlsx"
+    r"C:\Users\Sunlight\Desktop\DB\DEDU\merged_4_files.xlsx"
 )
 
 OUTPUT_FILE = Path(
-    r"C:\Users\Sunlight\Desktop\NET\B2B\deduplicated.xlsx"
+    r"C:\Users\Sunlight\Desktop\DB\DEDU\deduplicated.xlsx"
 )
 
 AUDIT_FILE = Path(
