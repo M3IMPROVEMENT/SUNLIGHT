@@ -1,6 +1,6 @@
-
 from pathlib import Path
 import pandas as pd
+import re
 
 # ================= CONFIGURATION =================
 
@@ -16,93 +16,148 @@ AUDIT_FILE = Path(
     r"C:\Users\Sunlight\Desktop\NET\B2B\duplicates_audit.xlsx"
 )
 
-DEDUP_COLUMN = "TVA"
+# Columns used to identify duplicate phone numbers
+PHONE_COLUMNS = ["GSM", "TELE", "TEL1", "TEL2", "TEL3"]
 
-# ================= DEDUPLICATION =================
+# ================= PHONE CLEANING =================
+
+def normalize_phone(value):
+    """Normalize a phone number for comparison only."""
+
+    if pd.isna(value):
+        return ""
+
+    value = str(value).strip()
+
+    if not value or value.lower() in ("nan", "none"):
+        return ""
+
+    # Remove Excel decimal artifacts
+    value = re.sub(r"\.0$", "", value)
+
+    # Keep digits only
+    digits = re.sub(r"\D", "", value)
+
+    # Normalize Belgian international prefixes
+    if digits.startswith("0032"):
+        digits = digits[4:]
+    elif digits.startswith("000032"):
+        digits = digits[6:]
+    elif digits.startswith("32") and len(digits) >= 10:
+        digits = digits[2:]
+
+    # Compare Belgian local and international formats equally
+    # Example: 0475123456 and +32475123456
+    if digits.startswith("0") and len(digits) == 10:
+        digits = digits[1:]
+
+    return digits
+
+
+# ================= LOAD FILE =================
 
 df = pd.read_excel(INPUT_FILE, dtype=str)
-
-# Normalize headers
 df.columns = df.columns.astype(str).str.strip()
 
-if DEDUP_COLUMN not in df.columns:
-    raise ValueError(
-        f"Column '{DEDUP_COLUMN}' not found. "
-        f"Available columns: {list(df.columns)}"
-    )
+# Match column names without case sensitivity
+column_map = {col.upper(): col for col in df.columns}
 
-# Clean TVA for comparison only
-df["_dedup_key"] = (
-    df[DEDUP_COLUMN]
-    .fillna("")
-    .str.strip()
-    .str.upper()
-    .str.replace(r"[\s.\-/]", "", regex=True)
-)
-
-# Count non-empty cells in each row
-data_columns = [
-    col for col in df.columns
-    if col != "_dedup_key"
+available_phone_columns = [
+    column_map[col]
+    for col in PHONE_COLUMNS
+    if col in column_map
 ]
 
+if not available_phone_columns:
+    raise ValueError(
+        "No phone columns found. Expected one or more of: "
+        + ", ".join(PHONE_COLUMNS)
+        + f". Available columns: {list(df.columns)}"
+    )
+
+print("Phone columns used:", available_phone_columns)
+
+# ================= COMPLETENESS SCORE =================
+
+df["_original_order"] = range(len(df))
+
 df["_info_score"] = (
-    df[data_columns]
-    .fillna("")
+    df.fillna("")
     .apply(
         lambda col: col.astype(str).str.strip().ne("")
     )
     .sum(axis=1)
+    - 1  # Exclude the temporary order column
 )
 
-# Separate rows with and without a TVA
-has_key = df["_dedup_key"].ne("")
+# Extract unique phone numbers from each row
+df["_phone_keys"] = df[available_phone_columns].apply(
+    lambda row: list(dict.fromkeys(
+        phone for phone in (
+            normalize_phone(row[col])
+            for col in available_phone_columns
+        )
+        if phone
+    )),
+    axis=1
+)
 
-with_key = df[has_key].copy()
-without_key = df[~has_key].copy()
+# ================= DEDUPLICATION =================
+# Greedy matching: keep the most complete row first.
+# A row is considered duplicate if ANY of its phone
+# numbers has already been kept in another row.
 
-# Rank most complete rows first within each TVA
-with_key = with_key.sort_values(
+ranked = df.sort_values(
     "_info_score",
     ascending=False,
     kind="stable"
 )
 
-# Keep the most complete row for each TVA
-kept = with_key.drop_duplicates(
-    subset="_dedup_key",
-    keep="first"
+seen_phones = set()
+keep_indices = []
+duplicate_indices = []
+no_phone_indices = []
+
+for idx, row in ranked.iterrows():
+    phones = row["_phone_keys"]
+
+    if not phones:
+        # Never merge rows without a usable phone number
+        no_phone_indices.append(idx)
+        continue
+
+    if any(phone in seen_phones for phone in phones):
+        duplicate_indices.append(idx)
+    else:
+        keep_indices.append(idx)
+        seen_phones.update(phones)
+
+# Restore original row order in the output
+result_indices = sorted(keep_indices + no_phone_indices)
+result = df.loc[result_indices].copy()
+
+duplicates = df.loc[duplicate_indices].copy()
+
+# ================= EXPORT =================
+
+TEMP_COLUMNS = ["_original_order", "_info_score", "_phone_keys"]
+
+result.drop(columns=TEMP_COLUMNS).to_excel(
+    OUTPUT_FILE, index=False
 )
 
-# Keep rows with no TVA; don't merge them all into one
-result = pd.concat(
-    [kept, without_key],
-    ignore_index=True
+duplicates.drop(columns=TEMP_COLUMNS).to_excel(
+    AUDIT_FILE, index=False
 )
 
-# Export removed duplicates for audit
-duplicate_mask = with_key.duplicated(
-    subset="_dedup_key",
-    keep="first"
-)
+# ================= REPORT =================
 
-duplicates = with_key.loc[duplicate_mask].copy()
-
-# Remove temporary columns
-result = result.drop(
-    columns=["_dedup_key", "_info_score"]
-)
-
-duplicates = duplicates.drop(
-    columns=["_dedup_key", "_info_score"]
-)
-
-# Save
-result.to_excel(OUTPUT_FILE, index=False)
-duplicates.to_excel(AUDIT_FILE, index=False)
-
+print("\\n========== DEDUPLICATION REPORT ==========")
 print(f"Rows before: {len(df):,}")
 print(f"Rows after: {len(result):,}")
 print(f"Duplicate rows removed: {len(duplicates):,}")
+print(f"Rows without usable phone numbers kept: {len(no_phone_indices):,}")
+print(f"Phone columns used: {available_phone_columns}")
 print(f"Clean file: {OUTPUT_FILE}")
 print(f"Duplicate audit: {AUDIT_FILE}")
+print("==========================================")
