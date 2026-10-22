@@ -4,56 +4,105 @@ import pandas as pd
 
 # ================= CONFIGURATION =================
 
-FOLDER = Path(r"C:\Users\Sunlight\Desktop\NET\B2B")
+INPUT_FILE = Path(
+    r"C:\Users\Sunlight\Desktop\NET\B2B\merged.xlsx"
+)
 
-OUTPUT_FILE = FOLDER / "merged_4_files.xlsx"
+OUTPUT_FILE = Path(
+    r"C:\Users\Sunlight\Desktop\NET\B2B\deduplicated.xlsx"
+)
 
-# ================= FIND 4 FILES =================
+AUDIT_FILE = Path(
+    r"C:\Users\Sunlight\Desktop\NET\B2B\duplicates_audit.xlsx"
+)
 
-excel_files = sorted(
-    [
-        f for f in FOLDER.glob("*.xlsx")
-        if f.name != OUTPUT_FILE.name
-        and not f.name.startswith("~$")
-    ]
-)[:4]
+DEDUP_COLUMN = "TVA"
 
-if len(excel_files) != 4:
+# ================= DEDUPLICATION =================
+
+df = pd.read_excel(INPUT_FILE, dtype=str)
+
+# Normalize headers
+df.columns = df.columns.astype(str).str.strip()
+
+if DEDUP_COLUMN not in df.columns:
     raise ValueError(
-        f"Expected 4 Excel files, found {len(excel_files)}"
+        f"Column '{DEDUP_COLUMN}' not found. "
+        f"Available columns: {list(df.columns)}"
     )
 
-print("Files selected:")
-for file in excel_files:
-    print(" -", file.name)
-
-# ================= MERGE =================
-
-dataframes = []
-
-for file in excel_files:
-    df = pd.read_excel(file, dtype=str)
-    df.columns = df.columns.astype(str).str.strip()
-    df["source"] = file.name
-
-    dataframes.append(df)
-    print(f"Read {file.name}: {len(df):,} rows")
-
-merged = pd.concat(
-    dataframes,
-    ignore_index=True,
-    sort=False
+# Clean TVA for comparison only
+df["_dedup_key"] = (
+    df[DEDUP_COLUMN]
+    .fillna("")
+    .str.strip()
+    .str.upper()
+    .str.replace(r"[\s.\-/]", "", regex=True)
 )
 
-# ================= SAVE =================
+# Count non-empty cells in each row
+data_columns = [
+    col for col in df.columns
+    if col != "_dedup_key"
+]
 
-merged.to_excel(
-    OUTPUT_FILE,
-    index=False,
-    engine="openpyxl"
+df["_info_score"] = (
+    df[data_columns]
+    .fillna("")
+    .apply(
+        lambda col: col.astype(str).str.strip().ne("")
+    )
+    .sum(axis=1)
 )
 
-print("\n========== FINISHED ==========")
-print(f"Files merged: {len(excel_files)}")
-print(f"Total rows: {len(merged):,}")
-print(f"Saved to: {OUTPUT_FILE}")
+# Separate rows with and without a TVA
+has_key = df["_dedup_key"].ne("")
+
+with_key = df[has_key].copy()
+without_key = df[~has_key].copy()
+
+# Rank most complete rows first within each TVA
+with_key = with_key.sort_values(
+    "_info_score",
+    ascending=False,
+    kind="stable"
+)
+
+# Keep the most complete row for each TVA
+kept = with_key.drop_duplicates(
+    subset="_dedup_key",
+    keep="first"
+)
+
+# Keep rows with no TVA; don't merge them all into one
+result = pd.concat(
+    [kept, without_key],
+    ignore_index=True
+)
+
+# Export removed duplicates for audit
+duplicate_mask = with_key.duplicated(
+    subset="_dedup_key",
+    keep="first"
+)
+
+duplicates = with_key.loc[duplicate_mask].copy()
+
+# Remove temporary columns
+result = result.drop(
+    columns=["_dedup_key", "_info_score"]
+)
+
+duplicates = duplicates.drop(
+    columns=["_dedup_key", "_info_score"]
+)
+
+# Save
+result.to_excel(OUTPUT_FILE, index=False)
+duplicates.to_excel(AUDIT_FILE, index=False)
+
+print(f"Rows before: {len(df):,}")
+print(f"Rows after: {len(result):,}")
+print(f"Duplicate rows removed: {len(duplicates):,}")
+print(f"Clean file: {OUTPUT_FILE}")
+print(f"Duplicate audit: {AUDIT_FILE}")
