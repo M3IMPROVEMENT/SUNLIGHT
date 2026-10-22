@@ -1,123 +1,36 @@
-d: 700,000 rows | Duplicates merged: 34,139
-Processed: 800,000 rows | Duplicates merged: 40,410
-Processed: 900,000 rows | Duplicates merged: 47,847
-Processed: 1,000,000 rows | Duplicates merged: 54,199
 
-Finished: B2B_part_03.xlsx
-Rows processed: 1,000,000
-New records: 945,801
-Duplicates merged: 54,199
+from pathlib import Path
+import pandas as pd
 
-FILE 22 OF 54
+# ================= CONFIGURATION =================
 
-======================================================================
-PROCESSING: B2B_part_04.xlsx
-======================================================================
-Processed: 100,000 rows | Duplicates merged: 2,022
-Processed: 200,000 rows | Duplicates merged: 2,022
-Processed: 300,000 rows | Duplicates merged: 2,022
-Processed: 400,000 rows | Duplicates merged: 3,940
-Processed: 500,000 rows | Duplicates merged: 3,940
-Processed: 600,000 rows | Duplicates merged: 3,940
-Processed: 700,000 rows | Duplicates merged: 3,940
-Processed: 800,000 rows | Duplicates merged: 3,940
-Processed: 900,000 rows | Duplicates merged: 3,940
-Processed: 1,000,000 rows | Duplicates merged: 3,940
+FILE_1 = Path(r"C:\Users\Sunlight\Desktop\NET\B2B\file1.xlsx")
+FILE_2 = Path(r"C:\Users\Sunlight\Desktop\NET\B2B\file2.xlsx")
 
-Finished: B2B_part_04.xlsx
-Rows processed: 1,000,000
-New records: 996,060
-Duplicates merged: 3,940
+OUTPUT_FILE = Path(
+    r"C:\Users\Sunlight\Desktop\NET\B2B\merged.xlsx"
+)
 
-FILE 23 OF 54
+# ================= MERGING =================
 
-======================================================================
-PROCESSING: B2B_part_05.xlsx
-======================================================================
-Processed: 100,000 rows | Duplicates merged: 0
-Processed: 200,000 rows | Duplicates merged: 0
-Processed: 300,000 rows | Duplicates merged: 0
-Processed: 400,000 rows | Duplicates merged: 0
-Processed: 500,000 rows | Duplicates merged: 0
-Processed: 600,000 rows | Duplicates merged: 0
-Processed: 700,000 rows | Duplicates merged: 0
-Processed: 800,000 rows | Duplicates merged: 0
-Processed: 900,000 rows | Duplicates merged: 0
-Processed: 1,000,000 rows | Duplicates merged: 0
+df1 = pd.read_excel(FILE_1, dtype=str)
+df2 = pd.read_excel(FILE_2, dtype=str)
 
-Finished: B2B_part_05.xlsx
-Rows processed: 1,000,000
-New records: 1,000,000
-Duplicates merged: 0
+# Add the original filename
+df1["source"] = FILE_1.name
+df2["source"] = FILE_2.name
 
-FILE 24 OF 54
+# Combine all rows; align columns by header name
+merged = pd.concat(
+    [df1, df2],
+    ignore_index=True,
+    sort=False
+)
 
-======================================================================
-PROCESSING: B2B_part_06.xlsx
-======================================================================
-Processed: 100,000 rows | Duplicates merged: 0
-Processed: 200,000 rows | Duplicates merged: 0
-Processed: 300,000 rows | Duplicates merged: 353
-Processed: 400,000 rows | Duplicates merged: 353
-Processed: 500,000 rows | Duplicates merged: 353
-Processed: 600,000 rows | Duplicates merged: 353
-Processed: 700,000 rows | Duplicates merged: 353
-Processed: 800,000 rows | Duplicates merged: 35,081
+# Save without removing duplicates
+merged.to_excel(OUTPUT_FILE, index=False, engine="openpyxl")
 
-Finished: B2B_part_06.xlsx
-Rows processed: 873,677
-New records: 778,636
-Duplicates merged: 95,041
-
-FILE 25 OF 54
-
-======================================================================
-PROCESSING: B2C_part_01.xlsx
-======================================================================
-Processed: 100,000 rows | Duplicates merged: 71,101
-Processed: 200,000 rows | Duplicates merged: 71,101
-Processed: 300,000 rows | Duplicates merged: 71,101
-Processed: 400,000 rows | Duplicates merged: 71,101
-Processed: 500,000 rows | Duplicates merged: 71,101
-Processed: 600,000 rows | Duplicates merged: 71,101
-Processed: 700,000 rows | Duplicates merged: 71,101
-Processed: 800,000 rows | Duplicates merged: 71,101
-Processed: 900,000 rows | Duplicates merged: 71,101
-Processed: 1,000,000 rows | Duplicates merged: 71,101
-
-Finished: B2C_part_01.xlsx
-Rows processed: 1,000,000
-New records: 928,899
-Duplicates merged: 71,101
-
-FILE 26 OF 54
-
-======================================================================
-PROCESSING: B2C_part_02.xlsx
-======================================================================
-Processed: 100,000 rows | Duplicates merged: 62,302
-Processed: 200,000 rows | Duplicates merged: 64,623
-Processed: 300,000 rows | Duplicates merged: 67,302
-
-Finished: B2C_part_02.xlsx
-Rows processed: 386,129
-New records: 317,433
-Duplicates merged: 68,696
-
-FILE 27 OF 54
-
-======================================================================
-PROCESSING: DB1-DB2-NET.xlsx
-======================================================================
-Traceback (most recent call last):
-  File "C:\Users\Sunlight\Documents\NET - Copie\RS\script.PY", line 618, in <module>
-    main()
-  File "C:\Users\Sunlight\Documents\NET - Copie\RS\script.PY", line 591, in main
-    headers_reference = process_excel_file(
-                        ^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Sunlight\Documents\NET - Copie\RS\script.PY", line 387, in process_excel_file
-    raise ValueError(
-ValueError: Column structure differs in DB1-DB2-NET.xlsx.
-Expected: ['STE', 'TVA', 'NOM', 'ADRESSE', 'NUMERO', 'COMPLEMENT', 'CP', 'VILLE', 'TELE']
-Found: ['BB', 'TVA', 'NOM', 'ADRESSE', 'NUMERO', 'COMPLEMENT', 'CP', 'VILLE', 'TELE']
-PS C:\Users\Sunlight\Documents\NET - Copie\RS> 
+print(f"File 1 rows: {len(df1):,}")
+print(f"File 2 rows: {len(df2):,}")
+print(f"Total merged rows: {len(merged):,}")
+print(f"Output: {OUTPUT_FILE}")
