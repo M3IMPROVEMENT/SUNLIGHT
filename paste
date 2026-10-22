@@ -4,33 +4,56 @@ import pandas as pd
 
 # ================= CONFIGURATION =================
 
-FILE_1 = Path(r"C:\Users\Sunlight\Desktop\NET\B2B\file1.xlsx")
-FILE_2 = Path(r"C:\Users\Sunlight\Desktop\NET\B2B\file2.xlsx")
+FOLDER = Path(r"C:\Users\Sunlight\Desktop\NET\B2B")
 
-OUTPUT_FILE = Path(
-    r"C:\Users\Sunlight\Desktop\NET\B2B\merged.xlsx"
-)
+OUTPUT_FILE = FOLDER / "merged_4_files.xlsx"
 
-# ================= MERGING =================
+# ================= FIND 4 FILES =================
 
-df1 = pd.read_excel(FILE_1, dtype=str)
-df2 = pd.read_excel(FILE_2, dtype=str)
+excel_files = sorted(
+    [
+        f for f in FOLDER.glob("*.xlsx")
+        if f.name != OUTPUT_FILE.name
+        and not f.name.startswith("~$")
+    ]
+)[:4]
 
-# Add the original filename
-df1["source"] = FILE_1.name
-df2["source"] = FILE_2.name
+if len(excel_files) != 4:
+    raise ValueError(
+        f"Expected 4 Excel files, found {len(excel_files)}"
+    )
 
-# Combine all rows; align columns by header name
+print("Files selected:")
+for file in excel_files:
+    print(" -", file.name)
+
+# ================= MERGE =================
+
+dataframes = []
+
+for file in excel_files:
+    df = pd.read_excel(file, dtype=str)
+    df.columns = df.columns.astype(str).str.strip()
+    df["source"] = file.name
+
+    dataframes.append(df)
+    print(f"Read {file.name}: {len(df):,} rows")
+
 merged = pd.concat(
-    [df1, df2],
+    dataframes,
     ignore_index=True,
     sort=False
 )
 
-# Save without removing duplicates
-merged.to_excel(OUTPUT_FILE, index=False, engine="openpyxl")
+# ================= SAVE =================
 
-print(f"File 1 rows: {len(df1):,}")
-print(f"File 2 rows: {len(df2):,}")
-print(f"Total merged rows: {len(merged):,}")
-print(f"Output: {OUTPUT_FILE}")
+merged.to_excel(
+    OUTPUT_FILE,
+    index=False,
+    engine="openpyxl"
+)
+
+print("\n========== FINISHED ==========")
+print(f"Files merged: {len(excel_files)}")
+print(f"Total rows: {len(merged):,}")
+print(f"Saved to: {OUTPUT_FILE}")
