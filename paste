@@ -1,79 +1,62 @@
 
-import re
 from pathlib import Path
 from openpyxl import load_workbook, Workbook
+import re
 
-# =============== CONFIGURATION ===============
+# ==================================================
+# CONFIGURATION
+# ==================================================
 
 INPUT_FILE = Path(r"C:\Users\Sunlight\Desktop\DB\input.xlsx")
-OUTPUT_FILE = Path(r"C:\Users\Sunlight\Desktop\DB\separated_numbers.xlsx")
+OUTPUT_FILE = Path(r"C:\Users\Sunlight\Desktop\DB\separated.xlsx")
 
-# Put the exact header of the phone column here
+# Exact header of the column containing values like 42251504/0495402000
 PHONE_COLUMN = "TELE"
 
-# =============== PHONE DETECTION ===============
+# ==================================================
+# FUNCTIONS
+# ==================================================
 
-def split_phone_numbers(value):
+def split_values(value):
     if value is None:
         return []
 
-    # Remove Excel float suffix when applicable and keep digits
-    text = str(value).strip()
-    text = re.sub(r"\.0$", "", text)
+    # Excel can store large numbers in scientific notation.
+    # Convert numeric values without using str(float).
+    if isinstance(value, int):
+        text = str(value)
+    elif isinstance(value, float):
+        text = format(value, ".0f") if value.is_integer() else str(value)
+    else:
+        text = str(value).strip()
 
-    # If there are explicit separators, split them first
-    parts = re.split(r"[/;,|\s]+", text)
-    candidates = []
-
-    for part in parts:
-        digits = re.sub(r"\D", "", part)
-
-        # Convert Belgian international prefixes
-        if digits.startswith("0032"):
-            digits = "0" + digits[4:]
-        elif digits.startswith("32") and len(digits) >= 10:
-            digits = "0" + digits[2:]
-
-        if not digits:
-            continue
-
-        # Find Belgian numbers inside a concatenated digit string.
-        # GSM: 04 followed by 8 digits (10 digits total)
-        # Fixed: Belgian numbers beginning 0, generally 9 digits
-        i = 0
-        while i < len(digits):
-            if digits[i] != "0":
-                i += 1
-                continue
-
-            # Prefer GSM numbers: 046, 047, 048, 049
-            if digits[i:i+3] in ("046", "047", "048", "049"):
-                length = 10
-            else:
-                # Common Belgian fixed-line format
-                length = 9
-
-            number = digits[i:i+length]
-
-            if len(number) == length:
-                candidates.append(number)
-                i += length
-            else:
-                i += 1
-
-    # Remove duplicates while preserving order
-    return list(dict.fromkeys(candidates))
+    # Split on slash, semicolon, comma, or line break
+    parts = re.split(r"[/;,\r\n]+", text)
+    return [p.strip() for p in parts if p.strip()]
 
 
-def classify(number):
-    if re.fullmatch(r"04[6-9]\d{7}", number):
-        return "GSM"
-    if re.fullmatch(r"0[1-9]\d{7}", number):
-        return "FIX"
-    return "CHECK"
+def classify_number(value):
+    digits = re.sub(r"\D", "", value)
+
+    # Preserve Belgian international prefix conversion
+    if digits.startswith("0032"):
+        digits = "0" + digits[4:]
+    elif digits.startswith("32") and len(digits) in (10, 11):
+        digits = "0" + digits[2:]
+
+    if re.fullmatch(r"04[6-9]\d{7}", digits):
+        return digits, "GSM"
+
+    # Common Belgian fixed-line format
+    if re.fullmatch(r"0[1-9]\d{7}", digits) and not digits.startswith("04"):
+        return digits, "FIX"
+
+    return digits, "CHECK"
 
 
-# =============== PROCESS EXCEL ===============
+# ==================================================
+# READ INPUT
+# ==================================================
 
 wb = load_workbook(INPUT_FILE, read_only=True, data_only=True)
 ws = wb.active
@@ -82,42 +65,47 @@ headers = list(next(ws.iter_rows(min_row=1, max_row=1, values_only=True)))
 
 if PHONE_COLUMN not in headers:
     wb.close()
-    raise ValueError(f"Column '{PHONE_COLUMN}' not found. Headers: {headers}")
+    raise ValueError(
+        f"Column '{PHONE_COLUMN}' not found.\nAvailable headers: {headers}"
+    )
 
-phone_idx = headers.index(PHONE_COLUMN)
+phone_index = headers.index(PHONE_COLUMN)
+
+# ==================================================
+# WRITE OUTPUT
+# ==================================================
 
 out_wb = Workbook(write_only=True)
 out_ws = out_wb.create_sheet("Separated")
 out_ws.append(headers + ["TYPE_NUMERO"])
 
-processed = 0
-exported = 0
-not_detected = 0
+input_rows = 0
+output_rows = 0
 
 for row in ws.iter_rows(min_row=2, values_only=True):
     row = list(row)
-    processed += 1
+    input_rows += 1
 
-    numbers = split_phone_numbers(row[phone_idx])
+    values = split_values(row[phone_index])
 
-    if not numbers:
-        # Preserve the original row for manual review
-        out_ws.append(row + ["NOT_DETECTED"])
-        exported += 1
-        not_detected += 1
+    if not values:
+        out_ws.append(row + ["EMPTY"])
+        output_rows += 1
         continue
 
-    for number in numbers:
+    for value in values:
+        number, number_type = classify_number(value)
+
         new_row = row.copy()
-        new_row[phone_idx] = number
-        out_ws.append(new_row + [classify(number)])
-        exported += 1
+        new_row[phone_index] = number
+
+        out_ws.append(new_row + [number_type])
+        output_rows += 1
 
 wb.close()
 out_wb.save(OUTPUT_FILE)
 
-print("FINISHED")
-print("Input rows:", processed)
-print("Output rows:", exported)
-print("Rows without detected numbers:", not_detected)
-print("Output:", OUTPUT_FILE)
+print("Finished successfully!")
+print(f"Input rows: {input_rows:,}")
+print(f"Output rows: {output_rows:,}")
+print(f"Saved to: {OUTPUT_FILE}")
