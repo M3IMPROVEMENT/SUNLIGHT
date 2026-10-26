@@ -1,83 +1,86 @@
 
-def find_next(self, page, current_no):
-    """Find the next page reliably, including pagination with ellipses."""
+def next_page(self, page, current_no, current_links, results_url):
+    """Advance only when the next page produces different results."""
 
-    selectors = [
-        "a[rel='next']",
-        "button[rel='next']",
-        "a[aria-label*='next' i]",
-        "button[aria-label*='next' i]",
-        "a[aria-label*='suivant' i]",
-        "button[aria-label*='suivant' i]",
-        "li.next a",
-        "a.next",
-        "button.next",
-        "a.pagination-next",
-        "button.pagination-next",
-    ]
+    old_links = set(current_links)
+    old_url = page.url
 
-    for selector in selectors:
+    def wait_for_new_results(timeout_seconds=15):
+        deadline = time.time() + timeout_seconds
+
+        while time.time() < deadline:
+            self.check()
+            self.wait_if_blocked(page)
+
+            try:
+                current = set(self.links(page, tries=1).keys())
+
+                if current and current != old_links:
+                    self.log(
+                        f"  Page navigation confirmed: "
+                        f"{old_url} -> {page.url}"
+                    )
+                    return True
+
+            except Stopped:
+                raise
+            except Exception:
+                pass
+
+            self.sleep(1)
+
+        return False
+
+    # First try the actual next-page button.
+    btn = self.find_next(page, current_no)
+
+    if btn:
         try:
-            elements = page.locator(selector)
-            for i in range(min(elements.count(), 10)):
-                el = elements.nth(i)
-                if el.is_visible() and not self._disabled(el):
-                    return el
-        except Exception:
-            continue
+            self.log(f"  Clicking next after page {current_no}...")
 
-    # Search for a visible pagination control whose text is
-    # a next arrow, rather than assuming the last item is the arrow.
-    selectors = [
-        "nav a", "nav button",
-        ".pagination a", ".pagination button",
-        "[class*='paginat'] a",
-        "[class*='paginat'] button",
-    ]
+            btn.scroll_into_view_if_needed()
+            page.wait_for_timeout(500)
+            btn.click(timeout=10000)
 
-    for selector in selectors:
+            if wait_for_new_results():
+                return True
+
+            self.log("  Click did not change results; trying URL pagination.")
+
+        except Stopped:
+            raise
+        except Exception as e:
+            self.log(
+                "  Next-button error: "
+                + str(e).splitlines()[0][:120]
+            )
+
+    # Fallback: test common page-number query parameters.
+    for param in ("page", "pageNumber", "pageNo", "p"):
+        self.check()
+
+        target_url = url_with_page(
+            results_url, current_no + 1, param
+        )
+
         try:
-            elements = page.locator(selector)
-            for i in range(min(elements.count(), 100)):
-                el = elements.nth(i)
-                if not el.is_visible() or self._disabled(el):
-                    continue
+            self.log(f"  Trying fallback parameter: {param}")
 
-                text = (el.inner_text() or "").strip()
-                aria = (el.get_attribute("aria-label") or "").lower()
-                title = (el.get_attribute("title") or "").lower()
+            self.goto(page, target_url)
 
-                if (
-                    text in ("›", "»", ">", "→")
-                    or "next" in aria
-                    or "suivant" in aria
-                    or "next" in title
-                    or "suivant" in title
-                ):
-                    return el
-        except Exception:
-            continue
+            if wait_for_new_results(timeout_seconds=8):
+                return True
 
-    # Last resort: locate the exact next page number.
-    target = str(current_no + 1)
+        except Stopped:
+            raise
+        except Exception as e:
+            self.log(
+                f"  Fallback {param} failed: "
+                + str(e).splitlines()[0][:100]
+            )
 
-    for selector in [
-        "nav a", "nav button",
-        ".pagination a", ".pagination button",
-        "[class*='paginat'] a",
-        "[class*='paginat'] button",
-    ]:
-        try:
-            elements = page.locator(selector)
-            for i in range(min(elements.count(), 100)):
-                el = elements.nth(i)
-                if (
-                    el.is_visible()
-                    and (el.inner_text() or "").strip() == target
-                    and not self._disabled(el)
-                ):
-                    return el
-        except Exception:
-            continue
-
-    return None
+    self.log(
+        f"  Could not confirm page {current_no + 1}. "
+        "Check the saved pagination debug files."
+    )
+    return False
